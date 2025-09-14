@@ -14,26 +14,60 @@ interface TestResult {
   response?: any;
 }
 
-async function testRewriteEndpoint(): Promise<TestResult> {
-  const testName = "Rewrite Endpoint Test";
+interface MCPRequest {
+  jsonrpc: string;
+  id: number;
+  method: string;
+  params?: any;
+}
+
+interface MCPResponse {
+  jsonrpc: string;
+  id: number;
+  result?: any;
+  error?: {
+    code: number;
+    message: string;
+    data?: any;
+  };
+}
+
+interface StatusResponse {
+  name: string;
+  version: string;
+  status: string;
+  tools: string[];
+  mcpEndpoint: string;
+}
+
+async function testMCPInitialization(): Promise<TestResult> {
+  const testName = "MCP Initialization Test";
 
   try {
-    const testData = {
-      draft:
-        "Hi there, I wanted to let you know that the meeting is cancelled for tomorrow. Sorry for the short notice.",
-      instruction: "Make it more formal and professional",
+    console.log(`🧪 Testing MCP initialization...`);
+
+    const initRequest: MCPRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {},
+        },
+        clientInfo: {
+          name: "test-client",
+          version: "1.0.0",
+        },
+      },
     };
 
-    console.log(`🧪 Testing rewrite endpoint...`);
-    console.log(`📝 Original draft: "${testData.draft}"`);
-    console.log(`📋 Instruction: "${testData.instruction}"`);
-
-    const response = await fetch(`${BASE_URL}/rewrite`, {
+    const response = await fetch(`${BASE_URL}/mcp`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(testData),
+      body: JSON.stringify(initRequest),
     });
 
     if (!response.ok) {
@@ -44,19 +78,28 @@ async function testRewriteEndpoint(): Promise<TestResult> {
       };
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as MCPResponse;
 
-    if (!result.reply) {
+    if (result.error) {
       return {
         test: testName,
         passed: false,
-        error: "Response missing 'reply' field",
+        error: `MCP Error: ${result.error.message}`,
         response: result,
       };
     }
 
-    console.log(`✅ Rewrite successful!`);
-    console.log(`📄 Rewritten email: "${result.reply}"`);
+    if (!result.result) {
+      return {
+        test: testName,
+        passed: false,
+        error: "Response missing 'result' field",
+        response: result,
+      };
+    }
+
+    console.log(`✅ MCP initialization successful!`);
+    console.log(`📋 Server: ${result.result.serverInfo?.name} v${result.result.serverInfo?.version}`);
 
     return {
       test: testName,
@@ -72,13 +115,13 @@ async function testRewriteEndpoint(): Promise<TestResult> {
   }
 }
 
-async function testHealthEndpoint(): Promise<TestResult> {
-  const testName = "Health Check Test";
+async function testStatusEndpoint(): Promise<TestResult> {
+  const testName = "Status Endpoint Test";
 
   try {
-    console.log(`🏥 Testing health endpoint...`);
+    console.log(`🏥 Testing status endpoint...`);
 
-    const response = await fetch(`${BASE_URL}/health`);
+    const response = await fetch(`${BASE_URL}/`);
 
     if (!response.ok) {
       return {
@@ -88,9 +131,9 @@ async function testHealthEndpoint(): Promise<TestResult> {
       };
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as StatusResponse;
 
-    if (result.status !== "ok") {
+    if (result.status !== "running") {
       return {
         test: testName,
         passed: false,
@@ -99,8 +142,19 @@ async function testHealthEndpoint(): Promise<TestResult> {
       };
     }
 
-    console.log(`✅ Health check passed!`);
-    console.log(`⏰ Server timestamp: ${result.timestamp}`);
+    if (!result.tools || !Array.isArray(result.tools)) {
+      return {
+        test: testName,
+        passed: false,
+        error: "Response missing 'tools' array",
+        response: result,
+      };
+    }
+
+    console.log(`✅ Status check passed!`);
+    console.log(`📧 Server: ${result.name} v${result.version}`);
+    console.log(`🔗 MCP Endpoint: ${result.mcpEndpoint}`);
+    console.log(`📋 Available tools: ${result.tools.join(", ")}`);
 
     return {
       test: testName,
@@ -119,15 +173,14 @@ async function testHealthEndpoint(): Promise<TestResult> {
 async function checkServerConnection(): Promise<boolean> {
   try {
     console.log(`🔍 Checking if server is running on port ${PORT}...`);
-    const response = await fetch(`${BASE_URL}/health`, {
+    const response = await fetch(`${BASE_URL}/`, {
       method: "GET",
-      timeout: 5000,
     });
     return response.ok;
   } catch (error: any) {
     console.log(`❌ Server not running on port ${PORT}`);
     console.log(`💡 Error: ${error.message}`);
-    console.log(`💡 Make sure to run: npm run dev`);
+    console.log(`💡 Make sure to run: npm run http`);
     return false;
   }
 }
@@ -142,13 +195,13 @@ async function runTests() {
   const isServerRunning = await checkServerConnection();
   if (!isServerRunning) {
     console.log(`\n❌ Tests failed: Server is not running on port ${PORT}`);
-    console.log(`💡 Please start the server with: npm run dev`);
+    console.log(`💡 Please start the server with: npm run http`);
     process.exit(1);
   }
 
   console.log(`\n✅ Server is running! Starting tests...\n`);
 
-  const tests = [testHealthEndpoint, testRewriteEndpoint];
+  const tests = [testStatusEndpoint, testMCPInitialization];
 
   const results: TestResult[] = [];
 

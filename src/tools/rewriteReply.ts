@@ -1,26 +1,27 @@
+import { z } from "zod";
 import { callLLM } from "../llm.js";
+import { RewriteReplyInputSchema } from "../schemas.js";
 
-export const rewriteReply = {
+export const rewriteReplyTool = {
   name: "rewriteReply",
+  title: "Rewrite Reply",
   description: "Rewrite an email draft according to specific instructions",
   inputSchema: {
-    type: "object",
-    properties: {
-      draft: {
-        type: "string",
-        description: "The original email draft to rewrite",
-      },
-      instruction: {
-        type: "string",
-        description: "Instructions for how to rewrite the email",
-      },
-    },
-    required: ["draft", "instruction"],
+    draft: z.string().min(1, "Email draft is required"),
+    instruction: z.string().min(1, "Rewrite instruction is required"),
+  },
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: false,
+    destructiveHint: false,
+    openWorldHint: false,
+  },
+  handler: async ({ draft, instruction }: { draft: string; instruction: string }) => {
+    const validatedInput = RewriteReplyInputSchema.parse({ draft, instruction });
+    const prompt = `Here is a draft email:\n${validatedInput.draft}\n\nRewrite it according to this instruction: ${validatedInput.instruction}`;
+    const newDraft = await callLLM(prompt);
+    return {
+      content: [{ type: "text" as const, text: newDraft }],
+    };
   },
 };
-
-export async function rewriteReplyHandler({ draft, instruction }: { draft: string; instruction: string }) {
-  const prompt = `Here is a draft email:\n${draft}\n\nRewrite it according to this instruction: ${instruction}`;
-  const newDraft = await callLLM(prompt);
-  return { reply: newDraft };
-}

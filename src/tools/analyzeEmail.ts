@@ -1,76 +1,39 @@
+import { z } from "zod";
 import { callLLM } from "../llm.js";
+import { AnalyzeEmailInputSchema, EmailContentSchema } from "../schemas.js";
 
-export const analyzeEmail = {
+export const analyzeEmailTool = {
   name: "analyzeEmail",
+  title: "Analyze Email",
   description:
     "Analyze an email and provide structured insights including summary, main points, suggested actions, priority, category, and sentiment",
   inputSchema: {
-    type: "object",
-    properties: {
-      emailContent: {
-        type: "object",
-        description: "The email content to analyze",
-        properties: {
-          subject: {
-            type: "string",
-            description: "Email subject line",
-          },
-          sender: {
-            type: "string",
-            description: "Email sender address",
-          },
-          recipients: {
-            type: "object",
-            description: "Email recipients",
-            properties: {
-              to: {
-                type: "array",
-                items: { type: "string" },
-                description: "To recipients",
-              },
-              cc: {
-                type: "array",
-                items: { type: "string" },
-                description: "CC recipients",
-              },
-              bcc: {
-                type: "array",
-                items: { type: "string" },
-                description: "BCC recipients",
-              },
-            },
-          },
-          body: {
-            type: "string",
-            description: "Plain text email body",
-          },
-          bodyHtml: {
-            type: "string",
-            description: "HTML email body",
-          },
-        },
-        required: ["subject", "sender", "body"],
-      },
-    },
-    required: ["emailContent"],
+    emailContent: EmailContentSchema,
   },
-};
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    destructiveHint: false,
+    openWorldHint: false,
+  },
+  handler: async ({ emailContent }: { emailContent: any }) => {
+    const validatedInput = AnalyzeEmailInputSchema.parse({ emailContent });
+    const { emailContent: validatedEmailContent } = validatedInput;
 
-export async function analyzeEmailHandler({ emailContent }: { emailContent: any }) {
-  try {
-    // Extract text content from HTML if needed
-    const textContent = emailContent.body || stripHtml(emailContent.bodyHtml || "");
+    try {
+      // Extract text content from HTML if needed
+      const textContent = validatedEmailContent.body || stripHtml(validatedEmailContent.bodyHtml || "");
 
-    // Create a comprehensive prompt for AI analysis
-    const prompt = `
+      // Create a comprehensive prompt for AI analysis
+      const prompt = `
 Analyze this email and provide a structured response in JSON format:
 
 Email Details:
-- Subject: ${emailContent.subject}
-- From: ${emailContent.sender}
-- To: ${emailContent.recipients?.to?.join(", ") || "N/A"}
-- CC: ${emailContent.recipients?.cc?.join(", ") || "N/A"}
-- BCC: ${emailContent.recipients?.bcc?.join(", ") || "N/A"}
+- Subject: ${validatedEmailContent.subject}
+- From: ${validatedEmailContent.sender}
+- To: ${validatedEmailContent.recipients?.to?.join(", ") || "N/A"}
+- CC: ${validatedEmailContent.recipients?.cc?.join(", ") || "N/A"}
+- BCC: ${validatedEmailContent.recipients?.bcc?.join(", ") || "N/A"}
 
 Email Content:
 ${textContent}
@@ -97,22 +60,33 @@ Guidelines:
 - Respond with valid JSON only, no additional text
 `;
 
-    const aiResponse = await callLLM(prompt);
+      const aiResponse = await callLLM(prompt);
 
-    // Parse the AI response
-    try {
-      const analysis = JSON.parse(aiResponse);
-      return validateAnalysis(analysis);
-    } catch (parseError) {
-      console.error("Error parsing AI response:", parseError);
-      return generateFallbackAnalysis(emailContent, textContent);
+      // Parse the AI response
+      try {
+        const analysis = JSON.parse(aiResponse);
+        const validatedAnalysis = validateAnalysis(analysis);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(validatedAnalysis, null, 2) }],
+        };
+      } catch (parseError) {
+        console.error("Error parsing AI response:", parseError);
+        const fallbackAnalysis = generateFallbackAnalysis(validatedEmailContent, textContent);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(fallbackAnalysis, null, 2) }],
+        };
+      }
+    } catch (error) {
+      console.error("Error in analyzeEmail:", error);
+      const fallbackAnalysis = generateFallbackAnalysis(validatedEmailContent, validatedEmailContent.body || "");
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(fallbackAnalysis, null, 2) }],
+      };
     }
-  } catch (error) {
-    console.error("Error in analyzeEmailHandler:", error);
-    return generateFallbackAnalysis(emailContent, emailContent.body || "");
-  }
-}
+  },
+};
 
+// Helper functions for analyzeEmail
 function generateFallbackAnalysis(emailContent: any, textContent: string) {
   const wordCount = textContent.split(" ").length;
 
