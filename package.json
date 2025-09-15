@@ -8,7 +8,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "mcp": "tsx src/index.ts",
-    "http": "MCP_MODE=http tsx src/index.ts",
+    "http": "MCP_MODE=http npx tsx src/index.ts",
     "test": "tsx test.ts",
     "test:rewrite": "tsx test.ts"
   },

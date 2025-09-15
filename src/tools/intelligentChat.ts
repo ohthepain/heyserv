@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { callLLM } from "../llm.js";
+import { draftReplyTool } from "./draftReply.js";
 
 // Schema for conversation history items
 const ConversationItemSchema = z.object({
@@ -135,27 +136,74 @@ IMPORTANT: The user has selected a specific email in a thread. When suggesting a
 
 Available email operations you can suggest:
 1. summarizeEmail - Summarize the selected email content
-2. draftReply - Draft a reply to the selected email (considering the full thread context)
+2. draftReply - Draft a complete reply to the selected email (considering the full thread context)
 3. rewriteReply - Rewrite an email draft
 4. analyzeEmail - Analyze the selected email content for insights
 
 When suggesting actions, include the relevant email content in the parameters. For example:
-- For draftReply: include the emailContent from the selected email
+- For draftReply: include the emailContent from the selected email (will generate a complete reply)
 - For analyzeEmail: include the emailContent from the selected email
 - For summarizeEmail: include the emailContent from the selected email
 
+IMPORTANT: When suggesting draftReply, emphasize that it will generate a complete, professional email reply ready to send, not just a brief response.
+
+CRITICAL DECISION LOGIC:
+Analyze the user's message carefully to determine if they are:
+
+1. **REQUESTING A SPECIFIC ACTION** (use shouldPerformAction: true + actionToPerform):
+   - Direct commands: "Draft a reply", "Summarize this email", "Analyze this email"
+   - Imperative language: "Write a response", "Create a draft", "Generate a summary"
+   - Clear intent: "I need a reply to this", "Please draft something", "Can you summarize"
+   - Question forms requesting action: "Can you draft a reply?", "Could you analyze this?"
+
+2. **ASKING FOR ADVICE/OPTIONS** (use suggestedActions):
+   - General questions: "What should I do?", "How should I respond?"
+   - Seeking guidance: "What are my options?", "What would you recommend?"
+   - Exploratory: "What can you help me with?", "Tell me about this email"
+
+EXAMPLES OF SPECIFIC ACTION REQUESTS:
+- "Draft a reply" → shouldPerformAction: true, actionToPerform: draftReply
+- "Summarize this email" → shouldPerformAction: true, actionToPerform: summarizeEmail  
+- "Analyze this email" → shouldPerformAction: true, actionToPerform: analyzeEmail
+- "Can you draft a response?" → shouldPerformAction: true, actionToPerform: draftReply
+
+EXAMPLES OF ADVICE REQUESTS:
+- "What should I do?" → shouldPerformAction: false, suggestedActions: [multiple options]
+- "How should I respond?" → shouldPerformAction: false, suggestedActions: [multiple options]
+- "What are my options?" → shouldPerformAction: false, suggestedActions: [multiple options]
+
+STRICT RULES:
+1. If shouldPerformAction is true, NEVER include suggestedActions
+2. If shouldPerformAction is false, NEVER include actionToPerform
+3. Always include exactly one: either actionToPerform OR suggestedActions, never both
+
+CRITICAL: Analyze the user's exact message for these patterns:
+- "draft reply" or "draft a reply" → shouldPerformAction: true, actionToPerform with draftReply
+- "summarize" or "summarize this email" → shouldPerformAction: true, actionToPerform with summarizeEmail
+- "analyze" or "analyze this email" → shouldPerformAction: true, actionToPerform with analyzeEmail
+- "what should I do" or "how should I respond" → shouldPerformAction: false, suggestedActions
+
 Respond with a JSON object containing:
 - "response": Your helpful response to the user
-- "suggestedActions": Array of actions you think the user might want to take (optional)
-- "shouldPerformAction": Boolean indicating if you want to automatically perform an action (optional)
-- "actionToPerform": The specific action to perform if shouldPerformAction is true (optional)
+- "suggestedActions": Array of actions (ONLY if shouldPerformAction is false)
+- "shouldPerformAction": Boolean indicating if you detected a specific action request
+- "actionToPerform": The specific action to perform (ONLY if shouldPerformAction is true)
 
-Each suggested action should have:
+Each suggested action or actionToPerform should have:
 - "action": The action name (e.g., "summarizeEmail", "draftReply")
 - "description": What this action will do
-- "parameters": Any parameters needed for the action (include emailContent from selected email)
+- "parameters": Any parameters needed for the action
 
-Be helpful, conversational, and suggest relevant actions based on the user's message and the selected email context.`;
+For draftReply actions, format the parameters EXACTLY like this:
+{
+  "parameters": {
+    "email": "Subject: Meeting Request\\nFrom: Jane Smith <jane@company.com>\\nTime: 2024-01-15T10:00:00Z\\n\\nHi Paul, would you be available..."
+  }
+}
+
+DO NOT include the raw email object with id, messageIndex, etc. Just format the email content as a string with Subject, From, Time, and body.
+
+REMEMBER: If the user says "draft reply", set shouldPerformAction to true and use actionToPerform, NOT suggestedActions.`;
 
     try {
       const aiResponse = await callLLM(prompt);
@@ -171,6 +219,76 @@ Be helpful, conversational, and suggest relevant actions based on the user's mes
           suggestedActions: [],
           shouldPerformAction: false,
         };
+      }
+
+      // Post-process to ensure correct shouldPerformAction logic for specific commands
+      const message = validatedInput.message.trim().toLowerCase();
+
+      // Simple string matching for exact commands
+      if (message === "draft reply") {
+        console.log("MATCHED draft reply - modifying response");
+        const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
+          (email) => email.id === validatedInput.currentContext?.selectedEmailId
+        );
+
+        if (selectedEmail) {
+          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+
+          parsedResponse.shouldPerformAction = true;
+          parsedResponse = {
+            response: "I'll help you draft a reply to the selected email.",
+            shouldPerformAction: true,
+            actionToPerform: {
+              action: "draftReply",
+              description: "Draft a complete reply to the selected email",
+              parameters: {
+                email: formattedEmail,
+              },
+            },
+          };
+          delete parsedResponse.suggestedActions;
+          console.log("Modified response:", JSON.stringify(parsedResponse, null, 2));
+        }
+      } else if (message === "summarize" || message === "summarize email") {
+        const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
+          (email) => email.id === validatedInput.currentContext?.selectedEmailId
+        );
+
+        if (selectedEmail) {
+          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+
+          parsedResponse = {
+            response: "I'll help you summarize the selected email.",
+            shouldPerformAction: true,
+            actionToPerform: {
+              action: "summarizeEmail",
+              description: "Summarize the selected email content",
+              parameters: {
+                email: formattedEmail,
+              },
+            },
+          };
+        }
+      } else if (message === "analyze" || message === "analyze email") {
+        const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
+          (email) => email.id === validatedInput.currentContext?.selectedEmailId
+        );
+
+        if (selectedEmail) {
+          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+
+          parsedResponse = {
+            response: "I'll help you analyze the selected email.",
+            shouldPerformAction: true,
+            actionToPerform: {
+              action: "analyzeEmail",
+              description: "Analyze the selected email content for insights",
+              parameters: {
+                email: formattedEmail,
+              },
+            },
+          };
+        }
       }
 
       // Validate the response structure

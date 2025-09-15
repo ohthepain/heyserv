@@ -18,7 +18,24 @@ export const draftReplyTool = {
   },
   handler: async ({ email, tone = "polite" }: { email: string; tone?: string }) => {
     const validatedInput = DraftReplyInputSchema.parse({ email, tone });
-    const prompt = `Write a ${validatedInput.tone} reply to this email:\n\n${validatedInput.email}`;
+
+    const prompt = `You are a professional email assistant. Write a complete, well-structured reply to the following email. The reply should be ${validatedInput.tone} in tone.
+
+REQUIREMENTS:
+- Write a complete, professional email reply (not just a brief response)
+- Include a proper greeting and closing
+- Address all points mentioned in the original email
+- Be specific and actionable where appropriate
+- Maintain a ${validatedInput.tone} tone throughout
+- Aim for 2-4 paragraphs for a substantive response
+- Do not end with "..." or incomplete thoughts
+- Make it ready to send as-is
+
+ORIGINAL EMAIL:
+${validatedInput.email}
+
+Write a complete, professional reply:`;
+
     const reply = await callLLM(prompt);
     return {
       content: [{ type: "text" as const, text: reply }],
