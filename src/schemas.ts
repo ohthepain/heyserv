@@ -1,14 +1,45 @@
 import { z } from "zod";
 
+// Custom email validation that handles multiple email formats
+const emailWithDisplayName = z.string().refine(
+  (value) => {
+    // Handle multiple recipients separated by commas
+    const recipients = value.split(",").map((recipient) => recipient.trim());
+
+    for (const recipient of recipients) {
+      // Handle "Display Name <email@domain.com>" or '"Display Name" <email@domain.com>' format
+      const displayNameMatch = recipient.match(/^(?:"?)([^"<>]+?)(?:"?)\s*<(.+?)>$/);
+      if (displayNameMatch) {
+        const email = displayNameMatch[2].trim();
+        if (!z.string().email().safeParse(email).success) {
+          return false;
+        }
+        continue;
+      }
+
+      // Handle simple email format
+      if (!z.string().email().safeParse(recipient).success) {
+        return false;
+      }
+    }
+
+    return true;
+  },
+  {
+    message:
+      "Invalid email address. Supported formats: 'email@domain.com', 'Display Name <email@domain.com>', '\"Display Name\" <email@domain.com>', or multiple recipients separated by commas",
+  }
+);
+
 // Email content schema for analyzeEmail
 export const EmailContentSchema = z.object({
   subject: z.string().min(1, "Subject is required"),
-  sender: z.string().email("Invalid sender email address"),
+  sender: emailWithDisplayName,
   recipients: z
     .object({
-      to: z.array(z.string().email()).default([]),
-      cc: z.array(z.string().email()).default([]),
-      bcc: z.array(z.string().email()).default([]),
+      to: z.array(emailWithDisplayName).default([]),
+      cc: z.array(emailWithDisplayName).default([]),
+      bcc: z.array(emailWithDisplayName).default([]),
     })
     .optional(),
   body: z.string().min(1, "Email body is required"),

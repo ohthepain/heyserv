@@ -5,7 +5,13 @@ import { randomUUID } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { summarizeEmailTool, draftReplyTool, rewriteReplyTool, analyzeEmailTool } from "./tools/index.js";
+import {
+  summarizeEmailTool,
+  draftReplyTool,
+  rewriteReplyTool,
+  analyzeEmailTool,
+  intelligentChatTool,
+} from "./tools/index.js";
 
 // Load environment variables
 dotenv.config();
@@ -61,6 +67,17 @@ server.registerTool(
   analyzeEmailTool.handler
 );
 
+server.registerTool(
+  intelligentChatTool.name,
+  {
+    title: intelligentChatTool.title,
+    description: intelligentChatTool.description,
+    inputSchema: intelligentChatTool.inputSchema,
+    annotations: intelligentChatTool.annotations,
+  },
+  intelligentChatTool.handler
+);
+
 // Start the server
 async function main() {
   const mode = process.env.MCP_MODE || "stdio";
@@ -79,7 +96,7 @@ async function main() {
         name: "Gmail AI MCP Server",
         version: "1.0.0",
         status: "running",
-        tools: ["summarizeEmail", "draftReply", "rewriteReply", "analyzeEmail"],
+        tools: ["summarizeEmail", "draftReply", "rewriteReply", "analyzeEmail", "intelligent_chat"],
         mcpEndpoint: "/mcp",
       });
     });
@@ -205,6 +222,66 @@ async function main() {
                     openWorldHint: false,
                   },
                 },
+                {
+                  name: "intelligent_chat",
+                  title: "Intelligent Chat Assistant",
+                  description: "AI assistant that can chat and perform email operations",
+                  inputSchema: {
+                    type: "object",
+                    properties: {
+                      message: {
+                        type: "string",
+                        description: "The user's message",
+                      },
+                      conversationHistory: {
+                        type: "array",
+                        description: "Previous messages in the conversation",
+                        items: {
+                          type: "object",
+                          properties: {
+                            role: { type: "string", enum: ["user", "assistant", "system"] },
+                            content: { type: "string" },
+                            timestamp: { type: "string" },
+                          },
+                        },
+                      },
+                      currentContext: {
+                        type: "object",
+                        description: "Current email context (selected email, thread emails, etc.)",
+                        properties: {
+                          selectedEmailId: { type: "string" },
+                          threadEmails: {
+                            type: "array",
+                            description: "All emails in the current thread",
+                            items: {
+                              type: "object",
+                              properties: {
+                                id: { type: "string" },
+                                subject: { type: "string" },
+                                sender: { type: "string" },
+                                time: { type: "string" },
+                                body: { type: "string" },
+                                messageIndex: { type: "number" },
+                              },
+                            },
+                          },
+                          availableEmails: {
+                            type: "array",
+                            description: "List of available emails for context",
+                          },
+                          userEmail: { type: "string" },
+                        },
+                      },
+                    },
+                    required: ["message"],
+                  },
+                  annotations: {
+                    readOnlyHint: false,
+                    idempotentHint: false,
+                    destructiveHint: false,
+                    openWorldHint: false,
+                  },
+                },
               ],
             };
             break;
@@ -213,9 +290,8 @@ async function main() {
             const { name, arguments: args } = params;
 
             // Import the tool handlers
-            const { summarizeEmailTool, draftReplyTool, rewriteReplyTool, analyzeEmailTool } = await import(
-              "./tools/index.js"
-            );
+            const { summarizeEmailTool, draftReplyTool, rewriteReplyTool, analyzeEmailTool, intelligentChatTool } =
+              await import("./tools/index.js");
 
             let tool;
             let mappedArgs = args;
@@ -257,6 +333,10 @@ async function main() {
                     mappedArgs = { emailContent: args.emailContent };
                   }
                 }
+                break;
+              case "intelligent_chat":
+                tool = intelligentChatTool;
+                // No parameter mapping needed for intelligent chat
                 break;
               default:
                 return res.status(400).json({
@@ -306,6 +386,7 @@ async function main() {
       console.log("   - draftReply: Draft email replies");
       console.log("   - rewriteReply: Rewrite email drafts");
       console.log("   - analyzeEmail: Analyze email content with insights");
+      console.log("   - intelligent_chat: AI conversational assistant");
       console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
     });
   } else {
@@ -318,6 +399,7 @@ async function main() {
     console.log("   - draftReply: Draft email replies");
     console.log("   - rewriteReply: Rewrite email drafts");
     console.log("   - analyzeEmail: Analyze email content with insights");
+    console.log("   - intelligent_chat: AI conversational assistant");
     console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
   }
 }

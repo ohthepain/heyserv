@@ -49,6 +49,62 @@ A modern Model Context Protocol (MCP) server that provides AI-powered Gmail tool
 
 The server exposes the following MCP tools with full type safety, validation, and MCP tool hints for better client integration:
 
+### `intelligent_chat`
+
+AI-powered conversational assistant that can help with email tasks and suggest actions.
+
+**MCP Hints:**
+
+- `readOnlyHint: false` - Can suggest actions and operations
+- `idempotentHint: false` - Different responses for same input based on context
+
+**Parameters:**
+
+- `message` (string, required): The user's message or question
+- `conversationHistory` (array, optional): Previous messages in the conversation
+  - `role` (string): "user", "assistant", or "system"
+  - `content` (string): Message content
+  - `timestamp` (string): When the message was sent
+- `currentContext` (object, optional): Current email context
+  - `selectedEmailId` (string): Currently selected email ID
+  - `threadEmails` (array): All emails in the current thread
+    - `id` (string): Email ID
+    - `subject` (string): Email subject
+    - `sender` (string): Sender email address
+    - `time` (string): Email timestamp
+    - `body` (string): Email body content
+    - `messageIndex` (number): Position in thread (0-based)
+  - `availableEmails` (array): List of available emails
+  - `userEmail` (string): User's email address
+
+**Returns:**
+
+- `content` (array): MCP content array with structured response
+  - `type`: "text"
+  - `text`: JSON string containing:
+    - `response`: The AI's conversational response
+    - `suggestedActions`: Array of actions the user might want to take (optional)
+    - `shouldPerformAction`: Boolean indicating if an action should be auto-performed (optional)
+    - `actionToPerform`: Specific action to perform if auto-execution is enabled (optional)
+
+**Example Response:**
+
+```json
+{
+  "response": "I can help you draft a reply to that email!",
+  "suggestedActions": [
+    {
+      "action": "draftReply",
+      "description": "Draft a professional reply to the email",
+      "parameters": {
+        "emailContent": "Hi, can we reschedule our meeting for next week?",
+        "tone": "professional"
+      }
+    }
+  ]
+}
+```
+
 ### `analyzeEmail`
 
 Comprehensive email analysis with structured insights.
@@ -150,6 +206,18 @@ Rewrite email drafts according to specific instructions.
 - `content` (array): MCP content array with rewritten email
   - `type`: "text"
   - `text`: Rewritten email content
+
+## Supported Email Formats
+
+The server accepts various email address formats commonly used in email systems:
+
+✅ **Simple Format**: `paul@dserv.io`
+✅ **RFC 5322 Format**: `Paul Wilkinson <paul@dserv.io>`
+✅ **Quoted Format**: `"Paul Wilkinson" <paul@dserv.io>`
+✅ **Multiple Recipients**: `Paul Wilkinson <paul@dserv.io>, Jane Doe <jane@example.com>`
+✅ **Mixed Formats**: `paul@dserv.io, "Jane Smith" <jane.smith@company.com>`
+
+All email fields (`sender`, `recipients.to`, `recipients.cc`, `recipients.bcc`) support these formats.
 
 ## Usage with MCP Clients
 
