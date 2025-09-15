@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { callLLM } from "../llm.js";
 import { draftReplyTool } from "./draftReply.js";
+import { summarizeEmailTool } from "./summarizeEmail.js";
+import { analyzeEmailTool } from "./analyzeEmail.js";
 
 // Schema for conversation history items
 const ConversationItemSchema = z.object({
@@ -226,7 +228,7 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
 
       // Simple string matching for exact commands
       if (message === "draft reply") {
-        console.log("MATCHED draft reply - modifying response");
+        console.log("⚡ Processing: draft reply");
         const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
           (email) => email.id === validatedInput.currentContext?.selectedEmailId
         );
@@ -234,20 +236,23 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         if (selectedEmail) {
           const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
 
-          parsedResponse.shouldPerformAction = true;
+          // Generate the draft using draftReply tool
+          const draftResult = await draftReplyTool.handler({ email: formattedEmail });
+          const draftText = draftResult.content[0].text;
+
           parsedResponse = {
-            response: "I'll help you draft a reply to the selected email.",
+            response: "Here's a draft reply to the selected email.",
             shouldPerformAction: true,
             actionToPerform: {
               action: "draftReply",
-              description: "Draft a complete reply to the selected email",
+              description: "Draft a reply to the selected email",
               parameters: {
-                email: formattedEmail,
+                draft: draftText,
               },
             },
           };
           delete parsedResponse.suggestedActions;
-          console.log("Modified response:", JSON.stringify(parsedResponse, null, 2));
+          console.log("✓ Draft reply");
         }
       } else if (message === "summarize" || message === "summarize email") {
         const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
@@ -257,14 +262,18 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         if (selectedEmail) {
           const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
 
+          // Generate the summary using summarizeEmail tool
+          const summaryResult = await summarizeEmailTool.handler({ email: formattedEmail });
+          const summaryText = summaryResult.content[0].text;
+
           parsedResponse = {
-            response: "I'll help you summarize the selected email.",
+            response: "Here's a summary of the selected email.",
             shouldPerformAction: true,
             actionToPerform: {
               action: "summarizeEmail",
-              description: "Summarize the selected email content",
+              description: "Summarize the selected email",
               parameters: {
-                email: formattedEmail,
+                summary: summaryText,
               },
             },
           };
@@ -277,14 +286,18 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         if (selectedEmail) {
           const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
 
+          // Generate the analysis using analyzeEmail tool
+          const analysisResult = await analyzeEmailTool.handler({ email: formattedEmail });
+          const analysisText = analysisResult.content[0].text;
+
           parsedResponse = {
-            response: "I'll help you analyze the selected email.",
+            response: "Here's an analysis of the selected email.",
             shouldPerformAction: true,
             actionToPerform: {
               action: "analyzeEmail",
-              description: "Analyze the selected email content for insights",
+              description: "Analyze the selected email",
               parameters: {
-                email: formattedEmail,
+                analysis: analysisText,
               },
             },
           };
