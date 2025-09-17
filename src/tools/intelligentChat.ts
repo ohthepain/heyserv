@@ -3,6 +3,7 @@ import { callLLM } from "../llm.js";
 import { draftReplyTool } from "./draftReply.js";
 import { summarizeEmailTool } from "./summarizeEmail.js";
 import { analyzeEmailTool } from "./analyzeEmail.js";
+import { rewriteReplyTool } from "./rewriteReply.js";
 
 // Schema for conversation history items
 const ConversationItemSchema = z.object({
@@ -21,12 +22,34 @@ const ThreadEmailSchema = z.object({
   messageIndex: z.number(),
 });
 
+// Helper function to sanitize email body
+const sanitizeEmailBody = (body: string): string => {
+  // Remove quoted content (everything after "On ... wrote:")
+  const quotedMatch = body.match(/(?:On\s+.*\s+wrote:[\s\S]*$)/i);
+  if (quotedMatch) {
+    body = body.slice(0, quotedMatch.index).trim();
+  }
+  return body;
+};
+
 // Schema for current context
 const CurrentContextSchema = z.object({
   selectedEmailId: z.string().optional(),
   threadEmails: z.array(ThreadEmailSchema).optional(),
   availableEmails: z.array(z.any()).optional(),
   userEmail: z.string().optional(),
+  currentDraft: z
+    .object({
+      to: z.string(),
+      cc: z.string(),
+      bcc: z.string(),
+      subject: z.string(),
+      body: z.string(),
+      mode: z.string(),
+      originalEmailId: z.string(),
+      lastUpdated: z.number(),
+    })
+    .optional(),
 });
 
 // Input schema for the intelligent chat tool
@@ -101,26 +124,25 @@ export const intelligentChatTool = {
 - Thread: ${threadEmails.length} emails in conversation`;
 
       if (selectedEmail) {
+        const sanitizedBody = sanitizeEmailBody(selectedEmail.body);
         contextString += `
-- Selected Email Details:
-  * Subject: ${selectedEmail.subject}
+|- Selected Email Details:
   * From: ${selectedEmail.sender}
-  * Time: ${selectedEmail.time}
   * Position in thread: ${selectedEmail.messageIndex}
-  * Body: ${selectedEmail.body.substring(0, 200)}${selectedEmail.body.length > 200 ? "..." : ""}`;
+  * Body: ${sanitizedBody.substring(0, 200)}${sanitizedBody.length > 200 ? "..." : ""}`;
       }
 
       if (threadEmails.length > 0) {
         contextString += `
-- Full Thread (${threadEmails.length} messages):`;
+|- Full Thread (${threadEmails.length} messages):`;
         threadEmails
           .sort((a, b) => a.messageIndex - b.messageIndex)
           .forEach((email) => {
             const isSelected = email.id === selectedEmailId ? " [SELECTED]" : "";
+            const sanitizedBody = sanitizeEmailBody(email.body);
             contextString += `
-  ${email.messageIndex}. ${email.sender} (${email.time})${isSelected}
-     Subject: ${email.subject}
-     Body: ${email.body.substring(0, 100)}${email.body.length > 100 ? "..." : ""}`;
+  ${email.messageIndex}. ${email.sender}${isSelected}
+     Body: ${sanitizedBody.substring(0, 100)}${sanitizedBody.length > 100 ? "..." : ""}`;
           });
       }
     }
@@ -199,45 +221,68 @@ Each suggested action or actionToPerform should have:
 For draftReply actions, format the parameters EXACTLY like this:
 {
   "parameters": {
-    "email": "Subject: Meeting Request\\nFrom: Jane Smith <jane@company.com>\\nTime: 2024-01-15T10:00:00Z\\n\\nHi Paul, would you be available..."
+    "draft": "Dear Jane,\n\nThank you for your email. I am available..."
   }
 }
 
-DO NOT include the raw email object with id, messageIndex, etc. Just format the email content as a string with Subject, From, Time, and body.
+DO NOT include any metadata (Subject, From, Time) in the parameters. Just include the actual email body or draft text.
 
 REMEMBER: If the user says "draft reply", set shouldPerformAction to true and use actionToPerform, NOT suggestedActions.`;
 
     try {
-      const aiResponse = await callLLM(prompt);
-
-      // Try to parse the AI response as JSON
       let parsedResponse;
-      try {
-        parsedResponse = JSON.parse(aiResponse);
-      } catch (parseError) {
-        // If parsing fails, wrap the response in the expected format
-        parsedResponse = {
-          response: aiResponse,
-          suggestedActions: [],
-          shouldPerformAction: false,
-        };
-      }
 
       // Post-process to ensure correct shouldPerformAction logic for specific commands
       const message = validatedInput.message.trim().toLowerCase();
 
-      // Simple string matching for exact commands
-      if (message === "draft reply") {
+      // Check if user wants to modify current draft
+      const modifyDraftPattern =
+        /\b(change|update|modify|revise|rewrite|make|adjust|improve|enhance|fix|correct)\b.*\b(draft|reply|response|email|tone|style|format|it|this|that)\b/i;
+      const isModifyRequest = modifyDraftPattern.test(message) && validatedInput.currentContext?.currentDraft;
+
+      // Handle specific commands first
+      if (isModifyRequest && validatedInput.currentContext?.currentDraft) {
+        console.log("Found modify request and a draft");
+        // Extract just the body text from the current draft
+        const currentDraft = validatedInput.currentContext.currentDraft;
+        const currentDraftBody = typeof currentDraft === "string" ? currentDraft : currentDraft.body;
+        const bodyMatch = currentDraftBody.match(/\n\n([\s\S]+)$/);
+        const bodyText = bodyMatch ? bodyMatch[1].trim() : currentDraftBody;
+
+        // Use rewriteReply tool to modify the current draft
+        const rewriteResult = await rewriteReplyTool.handler({
+          draft: bodyText,
+          instruction: message,
+        });
+
+        // Parse the JSON response from rewriteReply tool
+        const rewriteResponse = JSON.parse(rewriteResult.content[0].text);
+        const updatedDraft = rewriteResponse.actionToPerform.parameters.draft;
+
+        parsedResponse = {
+          response: "I've updated the draft based on your instructions.",
+          shouldPerformAction: true,
+          actionToPerform: {
+            action: "draftReply",
+            description: "Updated draft based on your instructions",
+            parameters: {
+              draft: updatedDraft,
+            },
+          },
+        };
+        console.log("✓ Modified draft");
+      } else if (message === "draft reply") {
         console.log("⚡ Processing: draft reply");
         const selectedEmail = validatedInput.currentContext?.threadEmails?.find(
           (email) => email.id === validatedInput.currentContext?.selectedEmailId
         );
 
         if (selectedEmail) {
-          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+          // Just pass the sanitized body text to reduce request size
+          const bodyText = sanitizeEmailBody(selectedEmail.body);
 
           // Generate the draft using draftReply tool
-          const draftResult = await draftReplyTool.handler({ email: formattedEmail });
+          const draftResult = await draftReplyTool.handler({ email: bodyText });
           const draftText = draftResult.content[0].text;
 
           parsedResponse = {
@@ -251,7 +296,6 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
               },
             },
           };
-          delete parsedResponse.suggestedActions;
           console.log("✓ Draft reply");
         }
       } else if (message === "summarize" || message === "summarize email") {
@@ -260,10 +304,11 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         );
 
         if (selectedEmail) {
-          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+          // Just pass the sanitized body text to reduce request size
+          const bodyText = sanitizeEmailBody(selectedEmail.body);
 
           // Generate the summary using summarizeEmail tool
-          const summaryResult = await summarizeEmailTool.handler({ email: formattedEmail });
+          const summaryResult = await summarizeEmailTool.handler({ text: bodyText });
           const summaryText = summaryResult.content[0].text;
 
           parsedResponse = {
@@ -284,10 +329,17 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         );
 
         if (selectedEmail) {
-          const formattedEmail = `Subject: ${selectedEmail.subject}\nFrom: ${selectedEmail.sender}\nTime: ${selectedEmail.time}\n\n${selectedEmail.body}`;
+          // Just pass the sanitized body text to reduce request size
+          const bodyText = sanitizeEmailBody(selectedEmail.body);
 
           // Generate the analysis using analyzeEmail tool
-          const analysisResult = await analyzeEmailTool.handler({ email: formattedEmail });
+          const analysisResult = await analyzeEmailTool.handler({
+            emailContent: {
+              subject: selectedEmail.subject,
+              sender: selectedEmail.sender,
+              body: bodyText,
+            },
+          });
           const analysisText = analysisResult.content[0].text;
 
           parsedResponse = {
@@ -302,6 +354,21 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
             },
           };
         }
+      } else {
+        // Fallback to general chat handler
+        const aiResponse = await callLLM(prompt);
+
+        // Try to parse the AI response as JSON
+        try {
+          parsedResponse = JSON.parse(aiResponse);
+        } catch (parseError) {
+          // If parsing fails, wrap the response in the expected format
+          parsedResponse = {
+            response: aiResponse,
+            suggestedActions: [],
+            shouldPerformAction: false,
+          };
+        }
       }
 
       // Validate the response structure
@@ -311,7 +378,7 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(validatedResponse, null, 2),
+            text: JSON.stringify(parsedResponse),
           },
         ],
       };
@@ -329,7 +396,7 @@ REMEMBER: If the user says "draft reply", set shouldPerformAction to true and us
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(fallbackResponse, null, 2),
+            text: JSON.stringify(fallbackResponse),
           },
         ],
       };

@@ -2,13 +2,13 @@
   "name": "heyserv",
   "version": "1.0.0",
   "description": "MCP Server for Gmail AI tools",
-  "main": "dist/index.js",
+  "main": "dist/app.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
-    "mcp": "tsx src/index.ts",
-    "http": "MCP_MODE=http npx tsx src/index.ts",
+    "start": "node dist/app.js",
+    "dev": "tsx src/app.ts",
+    "mcp": "tsx src/app.ts",
+    "http": "MCP_MODE=http npx tsx src/app.ts",
     "test": "tsx test.ts",
     "test:rewrite": "tsx test.ts"
   },

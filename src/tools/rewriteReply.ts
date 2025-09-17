@@ -18,10 +18,36 @@ export const rewriteReplyTool = {
   },
   handler: async ({ draft, instruction }: { draft: string; instruction: string }) => {
     const validatedInput = RewriteReplyInputSchema.parse({ draft, instruction });
-    const prompt = `Here is a draft email:\n${validatedInput.draft}\n\nRewrite it according to this instruction: ${validatedInput.instruction}`;
+    const prompt = `You are a professional email assistant. Here is a draft email:
+
+${validatedInput.draft}
+
+Rewrite this email according to this instruction: ${validatedInput.instruction}
+
+REQUIREMENTS:
+- Keep the email format (Subject, From, etc. if present)
+- Maintain a professional tone
+- Keep the same basic structure (greeting, body, closing)
+- Make the requested changes while preserving the core message
+- Return the complete email, ready to send`;
     const newDraft = await callLLM(prompt);
     return {
-      content: [{ type: "text" as const, text: newDraft }],
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({
+            response: "Here's the rewritten draft.",
+            shouldPerformAction: true,
+            actionToPerform: {
+              action: "rewriteReply",
+              description: "Rewritten draft based on your instructions",
+              parameters: {
+                draft: newDraft,
+              },
+            },
+          }),
+        },
+      ],
     };
   },
 };

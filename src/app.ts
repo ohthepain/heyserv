@@ -1,17 +1,14 @@
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
-import { randomUUID } from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  summarizeEmailTool,
-  draftReplyTool,
-  rewriteReplyTool,
-  analyzeEmailTool,
-  intelligentChatTool,
-} from "./tools/index.js";
+import { summarizeEmailTool } from "./tools/summarizeEmail.js";
+import { draftReplyTool } from "./tools/draftReply.js";
+import { rewriteReplyTool } from "./tools/rewriteReply.js";
+import { analyzeEmailTool } from "./tools/analyzeEmail.js";
+import { intelligentChatTool } from "./tools/intelligentChat.js";
 
 // Load environment variables
 dotenv.config();
@@ -288,10 +285,6 @@ async function main() {
 
           case "tools/call":
             const { name, arguments: args } = params;
-
-            // Import the tool handlers
-            const { summarizeEmailTool, draftReplyTool, rewriteReplyTool, analyzeEmailTool, intelligentChatTool } =
-              await import("./tools/index.js");
 
             let tool;
             let mappedArgs = args;

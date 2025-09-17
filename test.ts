@@ -1,5 +1,10 @@
 import dotenv from "dotenv";
 import fetch from "node-fetch";
+import { draftReplyTool } from "./src/tools/draftReply.ts";
+import { rewriteReplyTool } from "./src/tools/rewriteReply.ts";
+import { summarizeEmailTool } from "./src/tools/summarizeEmail.ts";
+import { analyzeEmailTool } from "./src/tools/analyzeEmail.ts";
+import { intelligentChatTool } from "./src/tools/intelligentChat.ts";
 
 // Load environment variables
 dotenv.config();
@@ -242,6 +247,61 @@ async function runTests() {
     process.exit(1);
   }
 }
+
+export async function testTools() {
+  console.log("Testing draftReplyTool...");
+  const draftReplyResponse = await draftReplyTool.handler({
+    email: "This is a sample email content.",
+    tone: "professional",
+  });
+  console.log("draftReplyTool response:", draftReplyResponse);
+
+  console.log("Testing rewriteReplyTool...");
+  const rewriteReplyResponse = await rewriteReplyTool.handler({
+    draft: "This is a draft email.",
+    instruction: "Make it more formal.",
+  });
+  console.log("rewriteReplyTool response:", rewriteReplyResponse);
+
+  console.log("Testing summarizeEmailTool...");
+  const summarizeEmailResponse = await summarizeEmailTool.handler({
+    text: "This is a sample email content that needs summarizing.",
+  });
+  console.log("summarizeEmailTool response:", summarizeEmailResponse);
+
+  console.log("Testing analyzeEmailTool...");
+  const analyzeEmailResponse = await analyzeEmailTool.handler({
+    emailContent: {
+      subject: "Sample Subject",
+      sender: "sender@example.com",
+      body: "This is a sample email content.",
+    },
+  });
+  console.log("analyzeEmailTool response:", analyzeEmailResponse);
+
+  console.log("Testing intelligentChatTool...");
+  const intelligentChatResponse = await intelligentChatTool.handler({
+    message: "Draft a reply",
+    conversationHistory: [],
+    currentContext: {
+      selectedEmailId: "123",
+      threadEmails: [
+        {
+          id: "123",
+          subject: "Sample Subject",
+          sender: "sender@example.com",
+          time: "2025-09-15T10:20:59Z",
+          body: "This is a sample email content.",
+          messageIndex: 0,
+        },
+      ],
+      userEmail: "user@example.com",
+    },
+  });
+  console.log("intelligentChatTool response:", intelligentChatResponse);
+}
+
+testTools().catch(console.error);
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (reason, promise) => {

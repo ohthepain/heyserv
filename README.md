@@ -230,7 +230,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "gmail-ai": {
       "command": "npx",
-      "args": ["tsx", "/path/to/heyserv/src/index.ts"],
+      "args": ["tsx", "/path/to/heyserv/src/app.ts"],
       "env": {
         "OPENAI_API_KEY": "your-api-key-here"
       }
@@ -258,10 +258,10 @@ The server supports both stdio and HTTP transports:
 
 ```bash
 # Stdio mode (default)
-npx tsx src/index.ts
+npx tsx src/app.ts
 
 # HTTP mode
-MCP_MODE=http npx tsx src/index.ts
+MCP_MODE=http npx tsx src/app.ts
 ```
 
 ## Testing
@@ -312,13 +312,13 @@ The modular architecture makes it easy to add new tools:
    };
    ```
 
-2. **Export the tool** in `src/tools/index.ts`:
+2. **Export the tool** in `src/tools/app.ts`:
 
    ```typescript
    export { myNewTool } from "./myNewTool.js";
    ```
 
-3. **Register the tool** in `src/index.ts`:
+3. **Register the tool** in `src/app.ts`:
    ```typescript
    server.registerTool(
      myNewTool.name,
@@ -365,11 +365,11 @@ npm test
 
 ```
 src/
-├── index.ts          # Main MCP server entry point
+├── app.ts          # Main MCP server entry point
 ├── llm.ts           # OpenAI client configuration
 ├── schemas.ts       # Zod schemas for type validation
 └── tools/           # Individual tool implementations
-    ├── index.ts     # Tool exports
+    ├── app.ts     # Tool exports
     ├── summarizeEmail.ts
     ├── draftReply.ts
     ├── rewriteReply.ts
