@@ -27,7 +27,7 @@ import {
 dotenv.config();
 
 // Direct LLM function for chat (bypasses MCP tools)
-async function callLLMDirectly(prompt: string, context?: any): Promise<string> {
+async function callLLMDirectly(prompt: string, context?: any, conversationHistory?: any[]): Promise<string> {
   let systemPrompt = `You are an AI assistant that helps manage emails, contacts, and email-related tasks. You can analyze email content, draft replies, manage contacts, and provide intelligent insights about email threads and conversations.
 
 **Your Role:**
@@ -71,6 +71,15 @@ async function callLLMDirectly(prompt: string, context?: any): Promise<string> {
       }
     }
 
+    // Add conversation history if provided separately
+    if (conversationHistory && conversationHistory.length > 0) {
+      systemPrompt += `\n\n**Conversation History:**`;
+      conversationHistory.forEach((msg: any, index: number) => {
+        systemPrompt += `\n${msg.role}: ${msg.content}`;
+      });
+    }
+
+    // Also check if conversation history is embedded in context (backward compatibility)
     if (context.conversationHistory && context.conversationHistory.length > 0) {
       systemPrompt += `\n\n**Conversation History:**`;
       context.conversationHistory.forEach((msg: any, index: number) => {
@@ -251,7 +260,7 @@ async function main() {
     // Add a direct chat endpoint (bypasses MCP tools)
     app.post("/prompt", async (req, res) => {
       try {
-        const { prompt, context } = req.body;
+        const { prompt, context, conversationHistory } = req.body;
         if (!prompt) {
           return res.status(400).json({ error: "Prompt is required" });
         }
@@ -259,7 +268,8 @@ async function main() {
         // Direct LLM call - no MCP tool overhead
         console.log("Calling LLM directly with prompt:", prompt);
         console.log("Calling LLM directly with context:", context);
-        const response = await callLLMDirectly(prompt, context);
+        console.log("Calling LLM directly with conversationHistory:", conversationHistory);
+        const response = await callLLMDirectly(prompt, context, conversationHistory);
 
         res.json({
           success: true,
@@ -269,7 +279,7 @@ async function main() {
           emailId: context?.emailId || null,
           hasEmailThread: context?.emailThread ? "Yes" : "No",
           hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
-          conversationHistoryLength: context?.conversationHistory?.length || 0,
+          conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
         });
       } catch (error: any) {
         res.status(500).json({ error: "Internal server error", details: error.message });
