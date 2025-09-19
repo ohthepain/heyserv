@@ -40,6 +40,9 @@ A modern Model Context Protocol (MCP) server that provides AI-powered Gmail tool
    # HTTP mode (for web access and testing)
    npm run http
 
+   # Streaming HTTP mode (for real-time streaming with MCP clients)
+   npm run streaming-http
+
    # Production mode
    npm run build
    npm start
@@ -230,7 +233,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "gmail-ai": {
       "command": "npx",
-      "args": ["tsx", "/path/to/heyserv/src/app.ts"],
+      "args": ["tsx", "/path/to/heyserv/src/mcpServer.ts"],
       "env": {
         "OPENAI_API_KEY": "your-api-key-here"
       }
@@ -252,16 +255,49 @@ Then visit:
 - **Server Status**: http://localhost:4000/
 - **MCP Endpoint**: http://localhost:4000/mcp
 
+### Streaming HTTP Mode
+
+For real-time streaming with MCP clients that support streaming HTTP transport:
+
+```bash
+npm run streaming-http
+```
+
+This mode uses the `StreamableHTTPServerTransport` for efficient, real-time communication:
+
+- **MCP Endpoint**: http://localhost:4000/mcp
+- **Transport**: Streamable HTTP (supports streaming responses)
+- **Benefits**: Lower latency, real-time updates, better performance for long-running operations
+
 ### Other MCP Clients
 
-The server supports both stdio and HTTP transports:
+The server supports multiple transport modes:
 
 ```bash
 # Stdio mode (default)
-npx tsx src/app.ts
+npx tsx src/mcpServer.ts
 
 # HTTP mode
-MCP_MODE=http npx tsx src/app.ts
+MCP_MODE=http npx tsx src/mcpServer.ts
+
+# Streaming HTTP mode
+MCP_MODE=streaming-http npx tsx src/mcpServer.ts
+```
+
+### Environment Variables
+
+Configure the server behavior using environment variables:
+
+```bash
+# Server mode (stdio, http, streaming-http)
+MCP_MODE=streaming-http
+
+# Server port (for HTTP modes)
+PORT=4000
+
+# OpenAI configuration
+OPENAI_API_KEY=your-api-key-here
+OPENAI_MODEL=gpt-3.5-turbo
 ```
 
 ## Testing
@@ -312,13 +348,13 @@ The modular architecture makes it easy to add new tools:
    };
    ```
 
-2. **Export the tool** in `src/tools/app.ts`:
+2. **Export the tool** in `src/tools/mcpServer.ts`:
 
    ```typescript
    export { myNewTool } from "./myNewTool.js";
    ```
 
-3. **Register the tool** in `src/app.ts`:
+3. **Register the tool** in `src/mcpServer.ts`:
    ```typescript
    server.registerTool(
      myNewTool.name,
@@ -351,6 +387,9 @@ npm run mcp
 # Start development server (HTTP mode)
 npm run http
 
+# Start development server (Streaming HTTP mode)
+npm run streaming-http
+
 # Build for production
 npm run build
 
@@ -365,11 +404,12 @@ npm test
 
 ```
 src/
-├── app.ts          # Main MCP server entry point
+├── mcpServer.ts    # Main MCP server entry point
+├── mcpClient.ts    # MCP client for testing and development
 ├── llm.ts           # OpenAI client configuration
 ├── schemas.ts       # Zod schemas for type validation
 └── tools/           # Individual tool implementations
-    ├── app.ts     # Tool exports
+    ├── mcpClient.ts     # Tool exports
     ├── summarizeEmail.ts
     ├── draftReply.ts
     ├── rewriteReply.ts
