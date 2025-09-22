@@ -1,316 +1,458 @@
-import dotenv from "dotenv";
-import fetch from "node-fetch";
-import { draftReplyTool } from "./src/tools/draftReply.ts";
-import { rewriteReplyTool } from "./src/tools/rewriteReply.ts";
-import { summarizeEmailTool } from "./src/tools/summarizeEmail.ts";
-import { analyzeEmailTool } from "./src/tools/analyzeEmail.ts";
-import { intelligentChatTool } from "./src/tools/intelligentChat.ts";
+import { z } from "zod";
 
-// Load environment variables
-dotenv.config();
+// Define the expected response schemas
+const EmailContentSchema = z.object({
+  subject: z.string(),
+  sender: z.string(),
+  recipients: z.object({
+    to: z.array(z.string()),
+    cc: z.array(z.string()),
+    bcc: z.array(z.string()),
+  }),
+  body: z.string(),
+  bodyHtml: z.string().nullable().optional(),
+});
 
-const PORT = process.env.PORT || 4000;
-const BASE_URL = `http://localhost:${PORT}`;
+const AnalysisResultSchema = z.object({
+  summary: z.string(),
+  mainPoints: z.array(z.string()),
+  suggestedActions: z.array(z.string()),
+  priority: z.enum(["low", "medium", "high"]),
+  category: z.enum(["work", "personal", "marketing", "notification", "other"]),
+  sentiment: z.enum(["positive", "neutral", "negative"]),
+  tone: z.enum([
+    "professional",
+    "casual",
+    "formal",
+    "urgent",
+    "friendly",
+    "polite",
+    "aggressive",
+    "apologetic",
+    "neutral",
+  ]),
+});
 
-interface TestResult {
-  test: string;
-  passed: boolean;
-  error?: string;
-  response?: any;
-}
+const ToolResponseSchema = z.object({
+  jsonrpc: z.literal("2.0"),
+  id: z.number(),
+  result: z.object({
+    content: z.array(
+      z.object({
+        type: z.literal("text"),
+        text: z.string(),
+      })
+    ),
+    shouldPerformAction: z.boolean(),
+    actionToPerform: z.object({
+      action: z.string(),
+      description: z.string().optional(),
+      parameters: z.record(z.any()),
+    }),
+  }),
+});
 
-interface MCPRequest {
-  jsonrpc: string;
-  id: number;
-  method: string;
-  params?: any;
-}
+const ChatResponseSchema = z.object({
+  success: z.boolean(),
+  response: z.string(),
+  shouldPerformAction: z.boolean(),
+  actionToPerform: z.object({
+    action: z.string(),
+    description: z.string().optional(),
+    parameters: z.record(z.any()),
+  }),
+  prompt: z.string(),
+  contextProvided: z.string(),
+  emailId: z.string().nullable(),
+  hasEmailThread: z.string(),
+  hasCurrentDraft: z.string(),
+  conversationHistoryLength: z.number(),
+});
 
-interface MCPResponse {
-  jsonrpc: string;
-  id: number;
-  result?: any;
-  error?: {
-    code: number;
-    message: string;
-    data?: any;
+const StatusResponseSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  status: z.literal("running"),
+  transport: z.string(),
+  tools: z.array(z.string()),
+  mcpEndpoint: z.string(),
+  promptEndpoint: z.string(),
+});
+
+// Test data
+const testEmail = {
+  subject: "Test Email Subject",
+  sender: "test@example.com",
+  recipients: {
+    to: ["recipient@example.com"],
+    cc: [],
+    bcc: [],
+  },
+  body: "This is a test email body content.",
+};
+
+const testDraft =
+  "Dear John,\n\nThank you for your email. I appreciate you reaching out to me about this matter. I wanted to let you know that I have reviewed your request and I am happy to help you with this project. Please let me know if you need any additional information from me.\n\nBest regards,\nPaul";
+
+const testEmailThread =
+  "Email 1:\nSubject: Test Email\nFrom: test@example.com\nTime: 2025-01-01T00:00:00.000Z\nBody: This is a test email thread content.\n---";
+
+// Helper function to make HTTP requests
+async function makeRequest(url: string, payload: any, method: string = "POST") {
+  const options: RequestInit = {
+    method,
+    headers: {
+      Accept: "application/json, text/event-stream",
+    },
   };
+
+  if (method === "POST" && payload) {
+    options.headers = {
+      ...options.headers,
+      "Content-Type": "application/json",
+    };
+    options.body = JSON.stringify(payload);
+  }
+
+  const response = await fetch(url, options);
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+
+  return await response.json();
 }
 
-interface StatusResponse {
-  name: string;
-  version: string;
-  status: string;
-  tools: string[];
-  mcpEndpoint: string;
+// Test functions
+async function testStatusEndpoint() {
+  console.log("🧪 Testing status endpoint...");
+
+  const response = await makeRequest("http://localhost:4000/", {}, "GET");
+
+  // Validate response structure
+  const validatedResponse = StatusResponseSchema.parse(response);
+  console.log("✅ Status endpoint response structure is valid");
+
+  // Validate that server is running
+  if (validatedResponse.status !== "running") {
+    throw new Error(`Expected status 'running', got '${validatedResponse.status}'`);
+  }
+
+  // Validate that required tools are present
+  const requiredTools = ["summarizeEmail", "draftReply", "rewriteReply", "analyzeEmail"];
+  const missingTools = requiredTools.filter((tool) => !validatedResponse.tools.includes(tool));
+
+  if (missingTools.length > 0) {
+    throw new Error(`Missing required tools: ${missingTools.join(", ")}`);
+  }
+
+  console.log("✅ Status endpoint shows server is running with required tools");
 }
 
-async function testMCPInitialization(): Promise<TestResult> {
-  const testName = "MCP Initialization Test";
+async function testSummarizeEmailTool() {
+  console.log("🧪 Testing summarizeEmail tool...");
 
-  try {
-    console.log(`🧪 Testing MCP initialization...`);
-
-    const initRequest: MCPRequest = {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2024-11-05",
-        capabilities: {
-          tools: {},
-        },
-        clientInfo: {
-          name: "test-client",
-          version: "1.0.0",
-        },
+  const payload = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "summarizeEmail",
+      arguments: {
+        text: testEmailThread,
       },
-    };
+    },
+  };
 
-    const response = await fetch(`${BASE_URL}/mcp`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+  const response = await makeRequest("http://localhost:4000/mcp", payload);
+
+  // Validate response structure
+  const validatedResponse = ToolResponseSchema.parse(response);
+  console.log("✅ summarizeEmail tool response structure is valid");
+
+  // Validate that it returns action protocol
+  if (!validatedResponse.result.shouldPerformAction) {
+    throw new Error("summarizeEmail should return shouldPerformAction: true");
+  }
+
+  if (validatedResponse.result.actionToPerform.action !== "summarizeEmail") {
+    throw new Error(`Expected action 'summarizeEmail', got '${validatedResponse.result.actionToPerform.action}'`);
+  }
+
+  console.log("✅ summarizeEmail tool action protocol is correct");
+}
+
+async function testDraftReplyTool() {
+  console.log("🧪 Testing draftReply tool...");
+
+  const payload = {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "draftReply",
+      arguments: {
+        email: testEmailThread,
+        tone: "professional",
       },
-      body: JSON.stringify(initRequest),
-    });
+    },
+  };
 
-    if (!response.ok) {
-      return {
-        test: testName,
-        passed: false,
-        error: `HTTP ${response.status}: ${response.statusText}`,
-      };
-    }
+  const response = await makeRequest("http://localhost:4000/mcp", payload);
 
-    const result = (await response.json()) as MCPResponse;
+  // Validate response structure
+  const validatedResponse = ToolResponseSchema.parse(response);
+  console.log("✅ draftReply tool response structure is valid");
 
-    if (result.error) {
-      return {
-        test: testName,
-        passed: false,
-        error: `MCP Error: ${result.error.message}`,
-        response: result,
-      };
-    }
+  // Validate action protocol
+  if (!validatedResponse.result.shouldPerformAction) {
+    throw new Error("draftReply should return shouldPerformAction: true");
+  }
 
-    if (!result.result) {
-      return {
-        test: testName,
-        passed: false,
-        error: "Response missing 'result' field",
-        response: result,
-      };
-    }
+  if (validatedResponse.result.actionToPerform.action !== "draftReply") {
+    throw new Error(`Expected action 'draftReply', got '${validatedResponse.result.actionToPerform.action}'`);
+  }
 
-    console.log(`✅ MCP initialization successful!`);
-    console.log(`📋 Server: ${result.result.serverInfo?.name} v${result.result.serverInfo?.version}`);
+  // Validate that the email parameter contains structured email
+  const emailParam = validatedResponse.result.actionToPerform.parameters.email;
+  if (typeof emailParam === "string") {
+    throw new Error("draftReply should return structured email object, not string");
+  }
 
-    return {
-      test: testName,
-      passed: true,
-      response: result,
-    };
-  } catch (error: any) {
-    return {
-      test: testName,
-      passed: false,
-      error: error.message,
-    };
+  const validatedEmail = EmailContentSchema.parse(emailParam);
+  console.log("✅ draftReply tool returns structured email format");
+}
+
+async function testRewriteReplyTool() {
+  console.log("🧪 Testing rewriteReply tool...");
+
+  const payload = {
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: {
+      name: "rewriteReply",
+      arguments: {
+        draft: testDraft,
+        instruction: "make it shorter",
+      },
+    },
+  };
+
+  const response = await makeRequest("http://localhost:4000/mcp", payload);
+
+  // Validate response structure
+  const validatedResponse = ToolResponseSchema.parse(response);
+  console.log("✅ rewriteReply tool response structure is valid");
+
+  // Validate action protocol
+  if (!validatedResponse.result.shouldPerformAction) {
+    throw new Error("rewriteReply should return shouldPerformAction: true");
+  }
+
+  if (validatedResponse.result.actionToPerform.action !== "rewriteReply") {
+    throw new Error(`Expected action 'rewriteReply', got '${validatedResponse.result.actionToPerform.action}'`);
+  }
+
+  // Validate that the email parameter contains structured email
+  const emailParam = validatedResponse.result.actionToPerform.parameters.email;
+  if (typeof emailParam === "string") {
+    throw new Error("rewriteReply should return structured email object, not string");
+  }
+
+  const validatedEmail = EmailContentSchema.parse(emailParam);
+  console.log("✅ rewriteReply tool returns structured email format");
+}
+
+async function testAnalyzeEmailTool() {
+  console.log("🧪 Testing analyzeEmail tool...");
+
+  const payload = {
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: {
+      name: "analyzeEmail",
+      arguments: {
+        emailContent: testEmail,
+      },
+    },
+  };
+
+  const response = await makeRequest("http://localhost:4000/mcp", payload);
+
+  // Validate response structure
+  const validatedResponse = ToolResponseSchema.parse(response);
+  console.log("✅ analyzeEmail tool response structure is valid");
+
+  // Validate action protocol
+  if (!validatedResponse.result.shouldPerformAction) {
+    throw new Error("analyzeEmail should return shouldPerformAction: true");
+  }
+
+  if (validatedResponse.result.actionToPerform.action !== "analyzeEmail") {
+    throw new Error(`Expected action 'analyzeEmail', got '${validatedResponse.result.actionToPerform.action}'`);
+  }
+
+  // Validate that the content contains structured analysis
+  const contentText = validatedResponse.result.content[0].text;
+  try {
+    const analysis = JSON.parse(contentText);
+    const validatedAnalysis = AnalysisResultSchema.parse(analysis);
+    console.log("✅ analyzeEmail tool returns structured analysis format");
+  } catch (error) {
+    throw new Error("analyzeEmail should return structured analysis in content");
   }
 }
 
-async function testStatusEndpoint(): Promise<TestResult> {
-  const testName = "Status Endpoint Test";
+async function testChatDraftReply() {
+  console.log("🧪 Testing chat 'draft reply'...");
+
+  const payload = {
+    prompt: "draft reply",
+    context: {
+      emailThread: testEmailThread,
+      emailId: "test-email-id",
+      userPreferences: {
+        tone: "professional",
+        length: "detailed",
+      },
+      conversationHistory: [],
+    },
+  };
+
+  const response = await makeRequest("http://localhost:4000/chat", payload);
+
+  // Validate response structure
+  const validatedResponse = ChatResponseSchema.parse(response);
+  console.log("✅ Chat 'draft reply' response structure is valid");
+
+  // Validate that it uses draftReply tool
+  if (validatedResponse.actionToPerform.action !== "draftReply") {
+    throw new Error(`Expected action 'draftReply', got '${validatedResponse.actionToPerform.action}'`);
+  }
+
+  // Validate that the email parameter contains structured email
+  const emailParam = validatedResponse.actionToPerform.parameters.email;
+  if (typeof emailParam === "string") {
+    throw new Error("Chat draftReply should return structured email object, not string");
+  }
+
+  const validatedEmail = EmailContentSchema.parse(emailParam);
+  console.log("✅ Chat 'draft reply' returns structured email format");
+}
+
+async function testChatMakeItShorter() {
+  console.log("🧪 Testing chat 'make it shorter' with currentDraft...");
+
+  const payload = {
+    prompt: "make it shorter",
+    context: {
+      currentDraft: testDraft,
+      emailThread: testEmailThread,
+      emailId: "test-email-id",
+      userPreferences: {
+        tone: "professional",
+        length: "detailed",
+      },
+      conversationHistory: [],
+    },
+  };
+
+  const response = await makeRequest("http://localhost:4000/chat", payload);
+
+  // Validate response structure
+  const validatedResponse = ChatResponseSchema.parse(response);
+  console.log("✅ Chat 'make it shorter' response structure is valid");
+
+  // Validate that it uses rewriteReply tool (not summarizeEmail)
+  if (validatedResponse.actionToPerform.action !== "rewriteReply") {
+    throw new Error(
+      `Expected action 'rewriteReply' (context-aware), got '${validatedResponse.actionToPerform.action}'`
+    );
+  }
+
+  // Validate that the email parameter contains structured email
+  const emailParam = validatedResponse.actionToPerform.parameters.email;
+  if (typeof emailParam === "string") {
+    throw new Error("Chat rewriteReply should return structured email object, not string");
+  }
+
+  const validatedEmail = EmailContentSchema.parse(emailParam);
+  console.log("✅ Chat 'make it shorter' returns structured email format");
+}
+
+async function testChatMakeItShorterNoDraft() {
+  console.log("🧪 Testing chat 'make it shorter' without currentDraft...");
+
+  const payload = {
+    prompt: "make it shorter",
+    context: {
+      emailThread: testEmailThread,
+      emailId: "test-email-id",
+      userPreferences: {
+        tone: "professional",
+        length: "detailed",
+      },
+      conversationHistory: [],
+    },
+  };
+
+  const response = await makeRequest("http://localhost:4000/chat", payload);
+
+  // Validate response structure
+  const validatedResponse = ChatResponseSchema.parse(response);
+  console.log("✅ Chat 'make it shorter' (no draft) response structure is valid");
+
+  // Validate that it uses summarizeEmail tool when no currentDraft
+  if (validatedResponse.actionToPerform.action !== "summarizeEmail") {
+    throw new Error(
+      `Expected action 'summarizeEmail' (no draft context), got '${validatedResponse.actionToPerform.action}'`
+    );
+  }
+
+  console.log("✅ Chat 'make it shorter' (no draft) uses correct tool");
+}
+
+// Main test runner
+async function runProtocolTests() {
+  console.log("🚀 Starting Protocol Tests...\n");
 
   try {
-    console.log(`🏥 Testing status endpoint...`);
+    await testStatusEndpoint();
+    console.log("");
 
-    const response = await fetch(`${BASE_URL}/`);
+    await testSummarizeEmailTool();
+    console.log("");
 
-    if (!response.ok) {
-      return {
-        test: testName,
-        passed: false,
-        error: `HTTP ${response.status}: ${response.statusText}`,
-      };
-    }
+    await testDraftReplyTool();
+    console.log("");
 
-    const result = (await response.json()) as StatusResponse;
+    await testRewriteReplyTool();
+    console.log("");
 
-    if (result.status !== "running") {
-      return {
-        test: testName,
-        passed: false,
-        error: `Unexpected status: ${result.status}`,
-        response: result,
-      };
-    }
+    await testAnalyzeEmailTool();
+    console.log("");
 
-    if (!result.tools || !Array.isArray(result.tools)) {
-      return {
-        test: testName,
-        passed: false,
-        error: "Response missing 'tools' array",
-        response: result,
-      };
-    }
+    await testChatDraftReply();
+    console.log("");
 
-    console.log(`✅ Status check passed!`);
-    console.log(`📧 Server: ${result.name} v${result.version}`);
-    console.log(`🔗 MCP Endpoint: ${result.mcpEndpoint}`);
-    console.log(`📋 Available tools: ${result.tools.join(", ")}`);
+    await testChatMakeItShorter();
+    console.log("");
 
-    return {
-      test: testName,
-      passed: true,
-      response: result,
-    };
-  } catch (error: any) {
-    return {
-      test: testName,
-      passed: false,
-      error: error.message,
-    };
-  }
-}
+    await testChatMakeItShorterNoDraft();
+    console.log("");
 
-async function checkServerConnection(): Promise<boolean> {
-  try {
-    console.log(`🔍 Checking if server is running on port ${PORT}...`);
-    const response = await fetch(`${BASE_URL}/`, {
-      method: "GET",
-    });
-    return response.ok;
-  } catch (error: any) {
-    console.log(`❌ Server not running on port ${PORT}`);
-    console.log(`💡 Error: ${error.message}`);
-    console.log(`💡 Make sure to run: npm run http`);
-    return false;
-  }
-}
-
-async function runTests() {
-  console.log(`🚀 Starting MCP Server Tests`);
-  console.log(`🌐 Testing server at: ${BASE_URL}`);
-  console.log(`📋 Port from .env: ${PORT}`);
-  console.log(`─`.repeat(50));
-
-  // Check if server is running
-  const isServerRunning = await checkServerConnection();
-  if (!isServerRunning) {
-    console.log(`\n❌ Tests failed: Server is not running on port ${PORT}`);
-    console.log(`💡 Please start the server with: npm run http`);
+    console.log("🎉 All protocol tests passed!");
+  } catch (error) {
+    console.error("❌ Protocol test failed:", error);
     process.exit(1);
   }
-
-  console.log(`\n✅ Server is running! Starting tests...\n`);
-
-  const tests = [testStatusEndpoint, testMCPInitialization];
-
-  const results: TestResult[] = [];
-
-  for (const test of tests) {
-    try {
-      const result = await test();
-      results.push(result);
-
-      if (result.passed) {
-        console.log(`✅ ${result.test}: PASSED\n`);
-      } else {
-        console.log(`❌ ${result.test}: FAILED`);
-        console.log(`   Error: ${result.error}\n`);
-      }
-    } catch (error: any) {
-      console.log(`💥 ${test.name}: ERROR - ${error.message}\n`);
-      results.push({
-        test: test.name,
-        passed: false,
-        error: error.message,
-      });
-    }
-  }
-
-  // Summary
-  console.log(`─`.repeat(50));
-  console.log(`📊 Test Summary:`);
-
-  const passed = results.filter((r) => r.passed).length;
-  const total = results.length;
-
-  console.log(`✅ Passed: ${passed}/${total}`);
-  if (passed === total) {
-    console.log(`\n🎉 All tests passed!`);
-    process.exit(0);
-  } else {
-    console.log(`❌ Failed: ${total - passed}/${total}`);
-    process.exit(1);
-  }
 }
 
-export async function testTools() {
-  console.log("Testing draftReplyTool...");
-  const draftReplyResponse = await draftReplyTool.handler({
-    email: "This is a sample email content.",
-    tone: "professional",
-  });
-  console.log("draftReplyTool response:", draftReplyResponse);
-
-  console.log("Testing rewriteReplyTool...");
-  const rewriteReplyResponse = await rewriteReplyTool.handler({
-    draft: "This is a draft email.",
-    instruction: "Make it more formal.",
-  });
-  console.log("rewriteReplyTool response:", rewriteReplyResponse);
-
-  console.log("Testing summarizeEmailTool...");
-  const summarizeEmailResponse = await summarizeEmailTool.handler({
-    text: "This is a sample email content that needs summarizing.",
-  });
-  console.log("summarizeEmailTool response:", summarizeEmailResponse);
-
-  console.log("Testing analyzeEmailTool...");
-  const analyzeEmailResponse = await analyzeEmailTool.handler({
-    emailContent: {
-      subject: "Sample Subject",
-      sender: "sender@example.com",
-      body: "This is a sample email content.",
-    },
-  });
-  console.log("analyzeEmailTool response:", analyzeEmailResponse);
-
-  console.log("Testing intelligentChatTool...");
-  const intelligentChatResponse = await intelligentChatTool.handler({
-    message: "Draft a reply",
-    conversationHistory: [],
-    currentContext: {
-      selectedEmailId: "123",
-      threadEmails: [
-        {
-          id: "123",
-          subject: "Sample Subject",
-          sender: "sender@example.com",
-          time: "2025-09-15T10:20:59Z",
-          body: "This is a sample email content.",
-          messageIndex: 0,
-        },
-      ],
-      userEmail: "user@example.com",
-    },
-  });
-  console.log("intelligentChatTool response:", intelligentChatResponse);
+// Run tests if this file is executed directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runProtocolTests();
 }
 
-testTools().catch(console.error);
-
-// Handle unhandled promise rejections
-process.on("unhandledRejection", (reason, promise) => {
-  console.log("💥 Unhandled Rejection at:", promise, "reason:", reason);
-  process.exit(1);
-});
-
-// Run the tests
-runTests().catch((error) => {
-  console.log(`💥 Test runner error: ${error.message}`);
-  process.exit(1);
-});
+export { runProtocolTests };

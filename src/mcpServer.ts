@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import { z } from "zod";
+import { spawn } from "child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -345,6 +346,52 @@ server.tool(
 );
 
 // Start the server
+// Function to run protocol tests in the background
+function runProtocolTestsInBackground(port: number) {
+  // Check if auto-tests are disabled
+  if (process.env.DISABLE_AUTO_TESTS === "true") {
+    console.log("🧪 Auto protocol tests disabled (DISABLE_AUTO_TESTS=true)");
+    return;
+  }
+
+  // Wait a bit for the server to fully start
+  setTimeout(() => {
+    console.log("🧪 Running protocol tests in background...");
+
+    const testProcess = spawn("npm", ["run", "test:protocol"], {
+      stdio: "pipe",
+      shell: true,
+    });
+
+    testProcess.stdout?.on("data", (data) => {
+      const output = data.toString();
+      // Only show test results, not the full output
+      if (output.includes("✅") || output.includes("❌") || output.includes("🎉")) {
+        console.log(`[TESTS] ${output.trim()}`);
+      }
+    });
+
+    testProcess.stderr?.on("data", (data) => {
+      const error = data.toString();
+      if (error.includes("Error") || error.includes("Failed")) {
+        console.log(`[TESTS] ${error.trim()}`);
+      }
+    });
+
+    testProcess.on("close", (code) => {
+      if (code === 0) {
+        console.log("🎉 [TESTS] All protocol tests passed!");
+      } else {
+        console.log(`❌ [TESTS] Protocol tests failed with code ${code}`);
+      }
+    });
+
+    testProcess.on("error", (error) => {
+      console.log(`❌ [TESTS] Failed to run protocol tests: ${error.message}`);
+    });
+  }, 2000); // Wait 2 seconds for server to start
+}
+
 async function main() {
   const mode = process.env.MCP_MODE || "stdio";
 
@@ -661,6 +708,9 @@ async function main() {
       console.log("     - getContactStats: Get contact statistics");
       console.log("     - getGlobalStats: Get global database stats");
       console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
+
+      // Run protocol tests in background
+      runProtocolTestsInBackground(port);
     });
   } else if (mode === "http") {
     // HTTP mode
@@ -719,6 +769,9 @@ async function main() {
       console.log("     - getContactStats: Get contact statistics");
       console.log("     - getGlobalStats: Get global database stats");
       console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
+
+      // Run protocol tests in background
+      runProtocolTestsInBackground(port);
     });
   } else {
     // Stdio mode (default)
