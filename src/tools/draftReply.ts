@@ -78,7 +78,6 @@ Return ONLY the JSON object, no additional text.`;
       shouldPerformAction: true,
       actionToPerform: {
         action: "draftReply",
-        description: "Draft a reply to the email with the specified tone",
         parameters: {
           email: structuredEmail, // The structured email object goes here
           originalEmail: validatedInput.email, // Keep the original email for reference
