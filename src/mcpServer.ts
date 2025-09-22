@@ -223,7 +223,7 @@ async function* callLLMWithToolsStream(
     functions.map((f) => f.name)
   );
 
-  // First, try to get a streaming response from the LLM
+  // Stream the initial LLM response
   let response = await openai.chat.completions.create({
     model,
     messages,
@@ -240,7 +240,7 @@ async function* callLLMWithToolsStream(
     const delta = chunk.choices[0]?.delta;
     if (!delta) continue;
 
-    // Handle content streaming
+    // Handle content streaming - this gives immediate feedback
     if (delta.content) {
       message += delta.content;
       yield { type: "content", data: delta.content };
@@ -328,7 +328,7 @@ async function* callLLMWithToolsStream(
         content: JSON.stringify(toolResult),
       });
 
-      // Get final response from LLM
+      // Get final response from LLM with streaming
       const finalResponse = await openai.chat.completions.create({
         model,
         messages,
