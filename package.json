@@ -15,6 +15,7 @@
     "streaming-http:no-tests": "DISABLE_AUTO_TESTS=true MCP_MODE=streaming-http npx tsx src/mcpServer.ts",
     "test": "tsx test.ts",
     "test:streaming": "tsx testStreamingHttp.ts",
+    "test:streaming-chat": "./test-streaming.sh",
     "test:contacts": "tsx testContactManager.ts",
     "test:protocol": "tsx test.ts",
     "db:generate": "prisma generate",

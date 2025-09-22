@@ -203,6 +203,160 @@ async function callLLMWithTools(
   return message?.content || "No response generated";
 }
 
+// Streaming version of callLLMWithTools
+async function* callLLMWithToolsStream(
+  prompt: string,
+  functions: any[],
+  systemPrompt: string,
+  server: any
+): AsyncGenerator<{ type: string; data: any }, void, unknown> {
+  const model = process.env.OPENAI_MODEL || "gpt-4";
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const messages: any[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: prompt },
+  ];
+
+  console.log(
+    "🔧 Calling OpenAI with functions (streaming):",
+    functions.map((f) => f.name)
+  );
+
+  // First, try to get a streaming response from the LLM
+  let response = await openai.chat.completions.create({
+    model,
+    messages,
+    functions,
+    function_call: "auto",
+    stream: true,
+  });
+
+  let message = "";
+  let functionCall: any = null;
+  let functionCallBuffer = "";
+
+  for await (const chunk of response) {
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) continue;
+
+    // Handle content streaming
+    if (delta.content) {
+      message += delta.content;
+      yield { type: "content", data: delta.content };
+    }
+
+    // Handle function call streaming
+    if (delta.function_call) {
+      if (delta.function_call.name) {
+        functionCall = {
+          name: delta.function_call.name,
+          arguments: "",
+        };
+        yield { type: "function_call_start", data: { name: delta.function_call.name } };
+      }
+
+      if (delta.function_call.arguments) {
+        functionCallBuffer += delta.function_call.arguments;
+        yield { type: "function_call_chunk", data: delta.function_call.arguments };
+      }
+    }
+  }
+
+  // If we have a complete function call, process it
+  if (functionCall && functionCallBuffer) {
+    try {
+      const functionArgs = JSON.parse(functionCallBuffer);
+      const functionName = functionCall.name;
+
+      yield { type: "function_call_complete", data: { name: functionName, arguments: functionArgs } };
+
+      console.log(`🔧 Calling tool: ${functionName}`, functionArgs);
+
+      // Call the MCP tool
+      const toolResponse = await fetch("http://localhost:4000/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: functionName,
+            arguments: functionArgs,
+          },
+        }),
+      });
+
+      const toolResponseJson = await toolResponse.json();
+
+      if (toolResponseJson.error) {
+        throw new Error(`Tool call failed: ${toolResponseJson.error.message}`);
+      }
+
+      const toolResult = toolResponseJson.result;
+
+      // Check if the tool returned an action protocol
+      if (toolResult.shouldPerformAction && toolResult.actionToPerform) {
+        yield {
+          type: "action_protocol",
+          data: {
+            content: toolResult.content,
+            shouldPerformAction: toolResult.shouldPerformAction,
+            actionToPerform: toolResult.actionToPerform,
+          },
+        };
+        return;
+      }
+
+      // Add function result to messages and continue conversation
+      messages.push({
+        role: "assistant",
+        content: null,
+        function_call: {
+          name: functionName,
+          arguments: functionCallBuffer,
+        },
+      });
+
+      messages.push({
+        role: "function",
+        name: functionName,
+        content: JSON.stringify(toolResult),
+      });
+
+      // Get final response from LLM
+      const finalResponse = await openai.chat.completions.create({
+        model,
+        messages,
+        functions,
+        function_call: "auto",
+        stream: true,
+      });
+
+      let finalMessage = "";
+      for await (const chunk of finalResponse) {
+        const delta = chunk.choices[0]?.delta;
+        if (delta?.content) {
+          finalMessage += delta.content;
+          yield { type: "content", data: delta.content };
+        }
+      }
+
+      yield { type: "complete", data: { message: finalMessage } };
+    } catch (error: any) {
+      console.error(`❌ Error calling tool ${functionCall.name}:`, error);
+      yield { type: "error", data: { error: error.message } };
+    }
+  } else {
+    // No function call, just return the message
+    yield { type: "complete", data: { message } };
+  }
+}
+
 // Create MCP server using the modern pattern
 const server = new McpServer({
   name: "gmail-ai-server",
@@ -653,6 +807,232 @@ async function main() {
       }
     });
 
+    // Streaming chat endpoint
+    app.post("/chat/stream", async (req, res) => {
+      try {
+        const { prompt, context, conversationHistory } = req.body;
+        if (!prompt) {
+          return res.status(400).json({ error: "Prompt is required" });
+        }
+
+        // Set up Server-Sent Events
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Cache-Control",
+        });
+
+        // Build the same context-aware system prompt as the regular chat endpoint
+        let systemPrompt = `You are an AI assistant that helps manage emails, contacts, and email-related tasks. You have access to various tools to:
+    - Create, update, and manage contacts
+    - Add and retrieve memories about contacts  
+    - Get statistics and analytics
+    - Summarize emails, draft replies, and analyze email content
+    
+    🚨 MOST IMPORTANT RULE: If the user has a currentDraft and asks to "make it shorter", they want to modify that draft, NOT summarize an email! Use rewriteReply tool in this case.
+    
+    🚨 SEMANTIC CLARIFICATION: 
+    - "make it shorter" + currentDraft = rewrite/condense the draft (use rewriteReply)
+    - "make it shorter" + no currentDraft = summarize the email (use summarizeEmail)
+    - "summarize" = always summarize (use summarizeEmail)
+    - "rewrite" = always rewrite (use rewriteReply)
+    
+    🚨 CRITICAL TOOL SELECTION RULES 🚨
+    When a user asks you to draft a reply, analyze an email, or summarize content, you MUST use the appropriate tools:
+    
+    📝 DRAFT REPLY: If the user says "draft reply", "write a response", "reply to this", or similar - ALWAYS use the draftReply tool
+    📊 SUMMARIZE: If the user says "summarize", "key points", "what's this about" - use the summarizeEmail tool  
+    🔍 ANALYZE: If the user says "analyze this email", "what does this email say" - use the analyzeEmail tool
+    ✏️ REWRITE: If the user says "rewrite", "make this better", "improve this" - use the rewriteReply tool
+    
+    🚨 CONTEXT-AWARE PRIORITY RULES 🚨
+    **IF THE USER HAS A CURRENT DRAFT OPEN:**
+    - Give HIGHEST PRIORITY to draft-related operations
+    - "make it shorter" → ALWAYS use rewriteReply (modify the current draft)
+    - "rewrite", "improve", "make it better" → use rewriteReply (modify the current draft)
+    - "summarize" → use summarizeEmail (summarize the original email being replied to)
+    - "draft reply" → use draftReply (create a new reply)
+    
+    **IF NO CURRENT DRAFT:**
+    - "make it shorter", "summarize", "key points" → use summarizeEmail (summarize the email being viewed)
+    - "draft reply", "write a response" → use draftReply (create a new reply)
+    - "analyze this email" → use analyzeEmail
+    
+    **CRITICAL DISAMBIGUATION:**
+    - "make it shorter" + currentDraft present = rewriteReply (modify draft)
+    - "make it shorter" + no currentDraft = summarizeEmail (summarize email)
+    
+    🚨 CRITICAL: When using tools, you MUST use the EXACT email content from the Email Thread context below, not create your own version! 
+    DO NOT make up or modify the email content - use it exactly as provided in the Email Thread section.
+    
+    The user's request was: "${prompt}"
+    
+    🚨 FINAL DECISION RULE 🚨
+    Before selecting a tool, ask yourself:
+    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
+    3. If both are YES, you MUST use rewriteReply tool!
+    
+    Based on this request and the context below, you MUST select the correct tool. Always use the tools when appropriate and provide helpful responses.`;
+
+        // Add rich context if provided (same as regular chat endpoint)
+        if (context) {
+          if (context.emailThread) {
+            systemPrompt += `\n\n**Email Thread:**\n${context.emailThread}\n\n🚨 CRITICAL INSTRUCTION: When calling the draftReply tool, you MUST extract the email body text from the Email Thread above. Look for the line that starts with "Body:" and copy everything after it exactly as it appears. Do NOT create, modify, or paraphrase the email content. Use the original email text verbatim.`;
+          }
+          if (context.emailId) {
+            systemPrompt += `\n\n**Email ID:** ${context.emailId}`;
+          }
+          if (context.currentDraft) {
+            systemPrompt += `\n\n**🚨 USER IS EDITING A DRAFT 🚨**
+**Current Draft:**\n${context.currentDraft}
+
+**CRITICAL:** The user has a draft open and is likely asking to modify it. If they say "make it shorter", "rewrite", "improve", or similar, they want to modify THIS DRAFT, not summarize the original email. Use rewriteReply tool for draft modifications.`;
+          }
+          if (context.userPreferences) {
+            systemPrompt += `\n\n**User Preferences:**`;
+            if (context.userPreferences.tone) {
+              systemPrompt += `\n- Preferred tone: ${context.userPreferences.tone}`;
+            }
+            if (context.userPreferences.length) {
+              systemPrompt += `\n- Preferred length: ${context.userPreferences.length}`;
+            }
+          }
+          if (context.conversationHistory && context.conversationHistory.length > 0) {
+            systemPrompt += `\n\n**Conversation History:**`;
+            context.conversationHistory.forEach((msg: any) => {
+              systemPrompt += `\n${msg.role}: ${msg.content}`;
+            });
+          }
+        }
+
+        // Add conversation history if provided separately
+        if (conversationHistory && conversationHistory.length > 0) {
+          systemPrompt += `\n\n**Conversation History:**`;
+          conversationHistory.forEach((msg: any) => {
+            systemPrompt += `\n${msg.role}: ${msg.content}`;
+          });
+        }
+
+        // Define the same available tools as the regular chat endpoint
+        const availableTools = [
+          {
+            name: "summarizeEmail",
+            description:
+              "📊 SUMMARIZE EMAIL: Extract key bullet points and main topics from email content. Use when user asks to 'summarize', 'key points', or 'what's this about'. IMPORTANT: Only use this when NO currentDraft is present, or when user explicitly wants to summarize the original email being replied to.",
+            parameters: {
+              type: "object",
+              properties: {
+                text: {
+                  type: "string",
+                  description: "The actual email text from the Email Thread context to summarize",
+                },
+              },
+              required: ["text"],
+            },
+          },
+          {
+            name: "draftReply",
+            description:
+              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+            parameters: {
+              type: "object",
+              properties: {
+                email: {
+                  type: "string",
+                  description:
+                    "Copy the email body text from the Email Thread context. Find the line starting with 'Body:' and copy everything after it exactly as written.",
+                },
+                tone: {
+                  type: "string",
+                  enum: ["professional", "casual", "formal"],
+                  description: "The tone of the reply",
+                },
+              },
+              required: ["email"],
+            },
+          },
+          {
+            name: "analyzeEmail",
+            description:
+              "🔍 ANALYZE EMAIL: Provide structured insights and analysis of email content. Use when user asks to 'analyze this email' or 'what does this email say'",
+            parameters: {
+              type: "object",
+              properties: {
+                emailContent: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string" },
+                    sender: { type: "string" },
+                    recipients: { type: "object" },
+                    body: { type: "string" },
+                  },
+                  required: ["subject", "sender", "recipients", "body"],
+                },
+              },
+              required: ["emailContent"],
+            },
+          },
+          {
+            name: "rewriteReply",
+            description:
+              "✏️ REWRITE REPLY: Improve and rewrite an existing email draft. Use when user asks to 'rewrite', 'make this better', 'improve this', or 'make it shorter'. IMPORTANT: This is the PRIMARY tool to use when user has a currentDraft and wants to modify it.",
+            parameters: {
+              type: "object",
+              properties: {
+                draft: { type: "string" },
+                instruction: { type: "string" },
+              },
+              required: ["draft", "instruction"],
+            },
+          },
+        ];
+
+        // Send initial metadata
+        res.write(
+          `data: ${JSON.stringify({
+            type: "metadata",
+            data: {
+              prompt,
+              contextProvided: context ? "Yes" : "No",
+              emailId: context?.emailId || null,
+              hasEmailThread: context?.emailThread ? "Yes" : "No",
+              hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
+              conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+            },
+          })}\n\n`
+        );
+
+        // Stream the LLM response
+        try {
+          for await (const chunk of callLLMWithToolsStream(prompt, availableTools, systemPrompt, server)) {
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+        } catch (error: any) {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              data: { error: error.message },
+            })}\n\n`
+          );
+        }
+
+        // Send completion signal
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        res.end();
+      } catch (error: any) {
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            data: { error: "Internal server error", details: error.message },
+          })}\n\n`
+        );
+        res.end();
+      }
+    });
+
     // Add a simple status endpoint
     app.get("/", (req, res) => {
       res.json({
@@ -678,7 +1058,235 @@ async function main() {
         ],
         mcpEndpoint: "/mcp",
         promptEndpoint: "/prompt",
+        chatEndpoint: "/chat",
+        streamingChatEndpoint: "/chat/stream",
       });
+    });
+
+    // Add streaming chat endpoint to streaming-http mode
+    app.post("/chat/stream", async (req, res) => {
+      try {
+        const { prompt, context, conversationHistory } = req.body;
+        if (!prompt) {
+          return res.status(400).json({ error: "Prompt is required" });
+        }
+
+        // Set up Server-Sent Events
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Cache-Control",
+        });
+
+        // Build the same context-aware system prompt as the regular chat endpoint
+        let systemPrompt = `You are an AI assistant that helps manage emails, contacts, and email-related tasks. You have access to various tools to:
+    - Create, update, and manage contacts
+    - Add and retrieve memories about contacts  
+    - Get statistics and analytics
+    - Summarize emails, draft replies, and analyze email content
+    
+    🚨 MOST IMPORTANT RULE: If the user has a currentDraft and asks to "make it shorter", they want to modify that draft, NOT summarize an email! Use rewriteReply tool in this case.
+    
+    🚨 SEMANTIC CLARIFICATION: 
+    - "make it shorter" + currentDraft = rewrite/condense the draft (use rewriteReply)
+    - "make it shorter" + no currentDraft = summarize the email (use summarizeEmail)
+    - "summarize" = always summarize (use summarizeEmail)
+    - "rewrite" = always rewrite (use rewriteReply)
+    
+    🚨 CRITICAL TOOL SELECTION RULES 🚨
+    When a user asks you to draft a reply, analyze an email, or summarize content, you MUST use the appropriate tools:
+    
+    📝 DRAFT REPLY: If the user says "draft reply", "write a response", "reply to this", or similar - ALWAYS use the draftReply tool
+    📊 SUMMARIZE: If the user says "summarize", "key points", "what's this about" - use the summarizeEmail tool  
+    🔍 ANALYZE: If the user says "analyze this email", "what does this email say" - use the analyzeEmail tool
+    ✏️ REWRITE: If the user says "rewrite", "make this better", "improve this" - use the rewriteReply tool
+    
+    🚨 CONTEXT-AWARE PRIORITY RULES 🚨
+    **IF THE USER HAS A CURRENT DRAFT OPEN:**
+    - Give HIGHEST PRIORITY to draft-related operations
+    - "make it shorter" → ALWAYS use rewriteReply (modify the current draft)
+    - "rewrite", "improve", "make it better" → use rewriteReply (modify the current draft)
+    - "summarize" → use summarizeEmail (summarize the original email being replied to)
+    - "draft reply" → use draftReply (create a new reply)
+    
+    **IF NO CURRENT DRAFT:**
+    - "make it shorter", "summarize", "key points" → use summarizeEmail (summarize the email being viewed)
+    - "draft reply", "write a response" → use draftReply (create a new reply)
+    - "analyze this email" → use analyzeEmail
+    
+    **CRITICAL DISAMBIGUATION:**
+    - "make it shorter" + currentDraft present = rewriteReply (modify draft)
+    - "make it shorter" + no currentDraft = summarizeEmail (summarize email)
+    
+    🚨 CRITICAL: When using tools, you MUST use the EXACT email content from the Email Thread context below, not create your own version! 
+    DO NOT make up or modify the email content - use it exactly as provided in the Email Thread section.
+    
+    The user's request was: "${prompt}"
+    
+    🚨 FINAL DECISION RULE 🚨
+    Before selecting a tool, ask yourself:
+    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
+    3. If both are YES, you MUST use rewriteReply tool!
+    
+    Based on this request and the context below, you MUST select the correct tool. Always use the tools when appropriate and provide helpful responses.`;
+
+        // Add rich context if provided (same as regular chat endpoint)
+        if (context) {
+          if (context.emailThread) {
+            systemPrompt += `\n\n**Email Thread:**\n${context.emailThread}\n\n🚨 CRITICAL INSTRUCTION: When calling the draftReply tool, you MUST extract the email body text from the Email Thread above. Look for the line that starts with "Body:" and copy everything after it exactly as it appears. Do NOT create, modify, or paraphrase the email content. Use the original email text verbatim.`;
+          }
+          if (context.emailId) {
+            systemPrompt += `\n\n**Email ID:** ${context.emailId}`;
+          }
+          if (context.currentDraft) {
+            systemPrompt += `\n\n**🚨 USER IS EDITING A DRAFT 🚨**
+**Current Draft:**\n${context.currentDraft}
+
+**CRITICAL:** The user has a draft open and is likely asking to modify it. If they say "make it shorter", "rewrite", "improve", or similar, they want to modify THIS DRAFT, not summarize the original email. Use rewriteReply tool for draft modifications.`;
+          }
+          if (context.userPreferences) {
+            systemPrompt += `\n\n**User Preferences:**`;
+            if (context.userPreferences.tone) {
+              systemPrompt += `\n- Preferred tone: ${context.userPreferences.tone}`;
+            }
+            if (context.userPreferences.length) {
+              systemPrompt += `\n- Preferred length: ${context.userPreferences.length}`;
+            }
+          }
+          if (context.conversationHistory && context.conversationHistory.length > 0) {
+            systemPrompt += `\n\n**Conversation History:**`;
+            context.conversationHistory.forEach((msg: any) => {
+              systemPrompt += `\n${msg.role}: ${msg.content}`;
+            });
+          }
+        }
+
+        // Add conversation history if provided separately
+        if (conversationHistory && conversationHistory.length > 0) {
+          systemPrompt += `\n\n**Conversation History:**`;
+          conversationHistory.forEach((msg: any) => {
+            systemPrompt += `\n${msg.role}: ${msg.content}`;
+          });
+        }
+
+        // Define the same available tools as the regular chat endpoint
+        const availableTools = [
+          {
+            name: "summarizeEmail",
+            description:
+              "📊 SUMMARIZE EMAIL: Extract key bullet points and main topics from email content. Use when user asks to 'summarize', 'key points', or 'what's this about'. IMPORTANT: Only use this when NO currentDraft is present, or when user explicitly wants to summarize the original email being replied to.",
+            parameters: {
+              type: "object",
+              properties: {
+                text: {
+                  type: "string",
+                  description: "The actual email text from the Email Thread context to summarize",
+                },
+              },
+              required: ["text"],
+            },
+          },
+          {
+            name: "draftReply",
+            description:
+              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+            parameters: {
+              type: "object",
+              properties: {
+                email: {
+                  type: "string",
+                  description:
+                    "Copy the email body text from the Email Thread context. Find the line starting with 'Body:' and copy everything after it exactly as written.",
+                },
+                tone: {
+                  type: "string",
+                  enum: ["professional", "casual", "formal"],
+                  description: "The tone of the reply",
+                },
+              },
+              required: ["email"],
+            },
+          },
+          {
+            name: "analyzeEmail",
+            description:
+              "🔍 ANALYZE EMAIL: Provide structured insights and analysis of email content. Use when user asks to 'analyze this email' or 'what does this email say'",
+            parameters: {
+              type: "object",
+              properties: {
+                emailContent: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string" },
+                    sender: { type: "string" },
+                    recipients: { type: "object" },
+                    body: { type: "string" },
+                  },
+                  required: ["subject", "sender", "recipients", "body"],
+                },
+              },
+              required: ["emailContent"],
+            },
+          },
+          {
+            name: "rewriteReply",
+            description:
+              "✏️ REWRITE REPLY: Improve and rewrite an existing email draft. Use when user asks to 'rewrite', 'make this better', 'improve this', or 'make it shorter'. IMPORTANT: This is the PRIMARY tool to use when user has a currentDraft and wants to modify it.",
+            parameters: {
+              type: "object",
+              properties: {
+                draft: { type: "string" },
+                instruction: { type: "string" },
+              },
+              required: ["draft", "instruction"],
+            },
+          },
+        ];
+
+        // Send initial metadata
+        res.write(
+          `data: ${JSON.stringify({
+            type: "metadata",
+            data: {
+              prompt,
+              contextProvided: context ? "Yes" : "No",
+              emailId: context?.emailId || null,
+              hasEmailThread: context?.emailThread ? "Yes" : "No",
+              hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
+              conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+            },
+          })}\n\n`
+        );
+
+        // Stream the LLM response
+        try {
+          for await (const chunk of callLLMWithToolsStream(prompt, availableTools, systemPrompt, server)) {
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+        } catch (error: any) {
+          res.write(
+            `data: ${JSON.stringify({
+              type: "error",
+              data: { error: error.message },
+            })}\n\n`
+          );
+        }
+
+        // Send completion signal
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        res.end();
+      } catch (error: any) {
+        res.write(
+          `data: ${JSON.stringify({
+            type: "error",
+            data: { error: "Internal server error", details: error.message },
+          })}\n\n`
+        );
+        res.end();
+      }
     });
 
     // Connect the server to the transport
@@ -710,7 +1318,7 @@ async function main() {
       console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
 
       // Run protocol tests in background
-      runProtocolTestsInBackground(port);
+      runProtocolTestsInBackground(Number(port));
     });
   } else if (mode === "http") {
     // HTTP mode
@@ -771,7 +1379,7 @@ async function main() {
       console.log(`🔑 OpenAI API Key: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing"}`);
 
       // Run protocol tests in background
-      runProtocolTestsInBackground(port);
+      runProtocolTestsInBackground(Number(port));
     });
   } else {
     // Stdio mode (default)
