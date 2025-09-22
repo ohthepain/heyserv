@@ -22,13 +22,14 @@ export const summarizeEmailTool = {
 
     // Return structured response with action protocol
     return {
-      content: [{ type: "text" as const, text: summary }],
+      content: [{ type: "text" as const, text: "I've summarized the email for you." }],
       shouldPerformAction: true,
       actionToPerform: {
         action: "summarizeEmail",
         description: "Summarize the email content into key bullet points",
         parameters: {
-          text: validatedInput.text,
+          text: summary, // The summary content goes here
+          originalText: validatedInput.text, // Keep the original text for reference
         },
       },
     };

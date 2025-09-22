@@ -29,17 +29,55 @@ REQUIREMENTS:
 - Maintain a professional tone
 - Keep the same basic structure (greeting, body, closing)
 - Make the requested changes while preserving the core message
-- Return the complete email, ready to send`;
+- Return the complete email, ready to send
+
+IMPORTANT: Return your response as a JSON object with this exact structure:
+{
+  "subject": "Email subject here",
+  "sender": "Sender Name <sender@example.com>",
+  "recipients": {
+    "to": ["recipient@example.com"],
+    "cc": [],
+    "bcc": []
+  },
+  "body": "Your rewritten email text here",
+  "bodyHtml": null
+}
+
+Return ONLY the JSON object, no additional text.`;
+
     const newDraft = await callLLM(prompt);
+
+    // Parse the JSON response
+    let structuredEmail;
+    try {
+      structuredEmail = JSON.parse(newDraft);
+    } catch (error) {
+      console.error("Error parsing email JSON:", error);
+      // Fallback to plain text format if JSON parsing fails
+      structuredEmail = {
+        subject: "Email Subject",
+        sender: "Sender <sender@example.com>",
+        recipients: {
+          to: ["recipient@example.com"],
+          cc: [],
+          bcc: [],
+        },
+        body: newDraft,
+        bodyHtml: null,
+      };
+    }
+
     return {
-      content: [{ type: "text" as const, text: newDraft }],
+      content: [{ type: "text" as const, text: "I've rewritten the email draft for you." }],
       shouldPerformAction: true,
       actionToPerform: {
         action: "rewriteReply",
         description: "Rewrite an email draft according to specific instructions",
         parameters: {
-          draft: newDraft,
+          email: structuredEmail, // The structured email object goes here
           instruction: validatedInput.instruction,
+          originalDraft: validatedInput.draft, // Keep the original draft for reference
         },
       },
     };

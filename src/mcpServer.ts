@@ -410,6 +410,14 @@ async function main() {
     - Get statistics and analytics
     - Summarize emails, draft replies, and analyze email content
     
+    🚨 MOST IMPORTANT RULE: If the user has a currentDraft and asks to "make it shorter", they want to modify that draft, NOT summarize an email! Use rewriteReply tool in this case.
+    
+    🚨 SEMANTIC CLARIFICATION: 
+    - "make it shorter" + currentDraft = rewrite/condense the draft (use rewriteReply)
+    - "make it shorter" + no currentDraft = summarize the email (use summarizeEmail)
+    - "summarize" = always summarize (use summarizeEmail)
+    - "rewrite" = always rewrite (use rewriteReply)
+    
     🚨 CRITICAL TOOL SELECTION RULES 🚨
     When a user asks you to draft a reply, analyze an email, or summarize content, you MUST use the appropriate tools:
     
@@ -418,12 +426,35 @@ async function main() {
     🔍 ANALYZE: If the user says "analyze this email", "what does this email say" - use the analyzeEmail tool
     ✏️ REWRITE: If the user says "rewrite", "make this better", "improve this" - use the rewriteReply tool
     
+    🚨 CONTEXT-AWARE PRIORITY RULES 🚨
+    **IF THE USER HAS A CURRENT DRAFT OPEN:**
+    - Give HIGHEST PRIORITY to draft-related operations
+    - "make it shorter" → ALWAYS use rewriteReply (modify the current draft)
+    - "rewrite", "improve", "make it better" → use rewriteReply (modify the current draft)
+    - "summarize" → use summarizeEmail (summarize the original email being replied to)
+    - "draft reply" → use draftReply (create a new reply)
+    
+    **IF NO CURRENT DRAFT:**
+    - "make it shorter", "summarize", "key points" → use summarizeEmail (summarize the email being viewed)
+    - "draft reply", "write a response" → use draftReply (create a new reply)
+    - "analyze this email" → use analyzeEmail
+    
+    **CRITICAL DISAMBIGUATION:**
+    - "make it shorter" + currentDraft present = rewriteReply (modify draft)
+    - "make it shorter" + no currentDraft = summarizeEmail (summarize email)
+    
     🚨 CRITICAL: When using tools, you MUST use the EXACT email content from the Email Thread context below, not create your own version! 
     DO NOT make up or modify the email content - use it exactly as provided in the Email Thread section.
     
     The user's request was: "${prompt}"
     
-    Based on this request, you MUST select the correct tool. Always use the tools when appropriate and provide helpful responses.`;
+    🚨 FINAL DECISION RULE 🚨
+    Before selecting a tool, ask yourself:
+    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
+    3. If both are YES, you MUST use rewriteReply tool!
+    
+    Based on this request and the context below, you MUST select the correct tool. Always use the tools when appropriate and provide helpful responses.`;
 
         // Add rich context if provided
         if (context) {
@@ -434,7 +465,10 @@ async function main() {
             systemPrompt += `\n\n**Email ID:** ${context.emailId}`;
           }
           if (context.currentDraft) {
-            systemPrompt += `\n\n**Current Draft:**\n${context.currentDraft}`;
+            systemPrompt += `\n\n**🚨 USER IS EDITING A DRAFT 🚨**
+**Current Draft:**\n${context.currentDraft}
+
+**CRITICAL:** The user has a draft open and is likely asking to modify it. If they say "make it shorter", "rewrite", "improve", or similar, they want to modify THIS DRAFT, not summarize the original email. Use rewriteReply tool for draft modifications.`;
           }
           if (context.userPreferences) {
             systemPrompt += `\n\n**User Preferences:**`;
@@ -467,7 +501,7 @@ async function main() {
           {
             name: "summarizeEmail",
             description:
-              "📊 SUMMARIZE EMAIL: Extract key bullet points and main topics from email content. Use when user asks to 'summarize', 'key points', or 'what's this about'. IMPORTANT: Use the actual email content from the Email Thread context.",
+              "📊 SUMMARIZE EMAIL: Extract key bullet points and main topics from email content. Use when user asks to 'summarize', 'key points', or 'what's this about'. IMPORTANT: Only use this when NO currentDraft is present, or when user explicitly wants to summarize the original email being replied to.",
             parameters: {
               type: "object",
               properties: {
@@ -524,7 +558,7 @@ async function main() {
           {
             name: "rewriteReply",
             description:
-              "✏️ REWRITE REPLY: Improve and rewrite an existing email draft. Use when user asks to 'rewrite', 'make this better', or 'improve this'",
+              "✏️ REWRITE REPLY: Improve and rewrite an existing email draft. Use when user asks to 'rewrite', 'make this better', 'improve this', or 'make it shorter'. IMPORTANT: This is the PRIMARY tool to use when user has a currentDraft and wants to modify it.",
             parameters: {
               type: "object",
               properties: {
@@ -537,6 +571,12 @@ async function main() {
         ];
 
         const functions = availableTools;
+
+        // Debug: Log the system prompt to see what's being sent
+        console.log("🔍 System prompt being sent to LLM:");
+        console.log(systemPrompt);
+        console.log("🔍 User prompt:", prompt);
+        console.log("🔍 Context:", JSON.stringify(context, null, 2));
 
         const response = await callLLMWithTools(prompt, functions, systemPrompt, server);
 
