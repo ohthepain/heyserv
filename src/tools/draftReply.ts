@@ -35,19 +35,53 @@ REQUIREMENTS:
 ORIGINAL EMAIL:
 ${validatedInput.email}
 
-Write a complete, professional reply:`;
+IMPORTANT: Return your response as a JSON object with this exact structure:
+{
+  "subject": "Re: [original subject or appropriate subject]",
+  "sender": "Your Name <your.email@example.com>",
+  "recipients": {
+    "to": ["recipient@example.com"],
+    "cc": [],
+    "bcc": []
+  },
+  "body": "Your complete email reply text here",
+  "bodyHtml": null
+}
+
+Return ONLY the JSON object, no additional text.`;
 
     const reply = await callLLM(prompt);
 
+    // Parse the JSON response
+    let structuredEmail;
+    try {
+      structuredEmail = JSON.parse(reply);
+    } catch (error) {
+      console.error("Error parsing email JSON:", error);
+      // Fallback to plain text format if JSON parsing fails
+      structuredEmail = {
+        subject: "Re: Email Reply",
+        sender: "User <user@example.com>",
+        recipients: {
+          to: ["recipient@example.com"],
+          cc: [],
+          bcc: [],
+        },
+        body: reply,
+        bodyHtml: null,
+      };
+    }
+
     // Return structured response with action protocol
     return {
-      content: [{ type: "text" as const, text: reply }],
+      content: [{ type: "text" as const, text: "I've drafted a reply to the email for you." }],
       shouldPerformAction: true,
       actionToPerform: {
         action: "draftReply",
         description: "Draft a reply to the email with the specified tone",
         parameters: {
-          email: validatedInput.email,
+          email: structuredEmail, // The structured email object goes here
+          originalEmail: validatedInput.email, // Keep the original email for reference
         },
       },
     };
