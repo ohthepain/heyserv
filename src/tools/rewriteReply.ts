@@ -32,22 +32,16 @@ REQUIREMENTS:
 - Return the complete email, ready to send`;
     const newDraft = await callLLM(prompt);
     return {
-      content: [
-        {
-          type: "text" as const,
-          text: JSON.stringify({
-            response: "Here's the rewritten draft.",
-            shouldPerformAction: true,
-            actionToPerform: {
-              action: "rewriteReply",
-              description: "Rewritten draft based on your instructions",
-              parameters: {
-                draft: newDraft,
-              },
-            },
-          }),
+      content: [{ type: "text" as const, text: newDraft }],
+      shouldPerformAction: true,
+      actionToPerform: {
+        action: "rewriteReply",
+        description: "Rewrite an email draft according to specific instructions",
+        parameters: {
+          draft: newDraft,
+          instruction: validatedInput.instruction,
         },
-      ],
+      },
     };
   },
 };

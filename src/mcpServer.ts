@@ -22,6 +22,7 @@ import {
   getContactStatsTool,
   getGlobalStatsTool,
 } from "./tools/contactTools.js";
+import { OpenAI } from "openai";
 
 // Load environment variables
 dotenv.config();
@@ -91,6 +92,114 @@ async function callLLMDirectly(prompt: string, context?: any, conversationHistor
   const fullPrompt = `${systemPrompt}\n\n**User Request:** ${prompt}\n\nPlease provide a helpful response.`;
 
   return await callLLM(fullPrompt);
+}
+
+async function callLLMWithTools(
+  prompt: string,
+  functions: any[],
+  systemPrompt: string,
+  server: any
+): Promise<string | any> {
+  const model = process.env.OPENAI_MODEL || "gpt-4";
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const messages: any[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: prompt },
+  ];
+
+  console.log(
+    "🔧 Calling OpenAI with functions:",
+    functions.map((f) => f.name)
+  );
+
+  let response = await openai.chat.completions.create({
+    model,
+    messages,
+    functions,
+    function_call: "auto",
+  });
+
+  let message = response.choices[0].message;
+  console.log("🤖 LLM response:", message?.content || "No content");
+  console.log("🔧 Function call:", message?.function_call);
+
+  // Handle function calls
+  while (message?.function_call) {
+    console.log("🔄 Processing function call...");
+    const functionName = message.function_call.name;
+    const functionArgs = JSON.parse(message.function_call.arguments || "{}");
+
+    console.log(`🔧 Calling tool: ${functionName}`, functionArgs);
+
+    try {
+      // Call the MCP tool via HTTP request to the /mcp endpoint
+      const toolResponse = await fetch("http://localhost:4000/mcp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: "tools/call",
+          params: {
+            name: functionName,
+            arguments: functionArgs,
+          },
+        }),
+      });
+
+      const toolResponseJson = await toolResponse.json();
+
+      if (toolResponseJson.error) {
+        throw new Error(`Tool call failed: ${toolResponseJson.error.message}`);
+      }
+
+      const toolResult = toolResponseJson.result;
+
+      // Check if the tool returned an action protocol - if so, return it directly
+      if (toolResult.shouldPerformAction && toolResult.actionToPerform) {
+        console.log("🔧 Tool returned action protocol, returning directly");
+        return {
+          content: toolResult.content,
+          shouldPerformAction: toolResult.shouldPerformAction,
+          actionToPerform: toolResult.actionToPerform,
+        };
+      }
+
+      // Add function result to messages for tools that don't have action protocol
+      messages.push({
+        role: "assistant",
+        content: null,
+        function_call: message.function_call,
+      });
+
+      messages.push({
+        role: "function",
+        name: functionName,
+        content: JSON.stringify(toolResult),
+      });
+
+      // Get next response from LLM
+      response = await openai.chat.completions.create({
+        model,
+        messages,
+        functions,
+        function_call: "auto",
+      });
+
+      message = response.choices[0].message;
+    } catch (error) {
+      console.error(`❌ Error calling tool ${functionName}:`, error);
+      // Return error message instead of breaking
+      return `Error calling tool ${functionName}: ${error}`;
+    }
+  }
+
+  console.log("✅ Function calling complete, final message:", message?.content || "No content");
+  return message?.content || "No response generated";
 }
 
 // Create MCP server using the modern pattern
@@ -274,6 +383,177 @@ async function main() {
         res.json({
           success: true,
           response: response,
+          prompt: prompt,
+          contextProvided: context ? "Yes" : "No",
+          emailId: context?.emailId || null,
+          hasEmailThread: context?.emailThread ? "Yes" : "No",
+          hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
+          conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Internal server error", details: error.message });
+      }
+    });
+
+    // Add a new endpoint for tool orchestration with context
+    app.post("/chat", async (req, res) => {
+      try {
+        const { prompt, context, conversationHistory } = req.body;
+        if (!prompt) {
+          return res.status(400).json({ error: "Prompt is required" });
+        }
+
+        // Build context-aware system prompt
+        let systemPrompt = `You are an AI assistant that helps manage emails, contacts, and email-related tasks. You have access to various tools to:
+    - Create, update, and manage contacts
+    - Add and retrieve memories about contacts  
+    - Get statistics and analytics
+    - Summarize emails, draft replies, and analyze email content
+    
+    🚨 CRITICAL TOOL SELECTION RULES 🚨
+    When a user asks you to draft a reply, analyze an email, or summarize content, you MUST use the appropriate tools:
+    
+    📝 DRAFT REPLY: If the user says "draft reply", "write a response", "reply to this", or similar - ALWAYS use the draftReply tool
+    📊 SUMMARIZE: If the user says "summarize", "key points", "what's this about" - use the summarizeEmail tool  
+    🔍 ANALYZE: If the user says "analyze this email", "what does this email say" - use the analyzeEmail tool
+    ✏️ REWRITE: If the user says "rewrite", "make this better", "improve this" - use the rewriteReply tool
+    
+    🚨 CRITICAL: When using tools, you MUST use the EXACT email content from the Email Thread context below, not create your own version! 
+    DO NOT make up or modify the email content - use it exactly as provided in the Email Thread section.
+    
+    The user's request was: "${prompt}"
+    
+    Based on this request, you MUST select the correct tool. Always use the tools when appropriate and provide helpful responses.`;
+
+        // Add rich context if provided
+        if (context) {
+          if (context.emailThread) {
+            systemPrompt += `\n\n**Email Thread:**\n${context.emailThread}\n\n🚨 CRITICAL INSTRUCTION: When calling the draftReply tool, you MUST extract the email body text from the Email Thread above. Look for the line that starts with "Body:" and copy everything after it exactly as it appears. Do NOT create, modify, or paraphrase the email content. Use the original email text verbatim.`;
+          }
+          if (context.emailId) {
+            systemPrompt += `\n\n**Email ID:** ${context.emailId}`;
+          }
+          if (context.currentDraft) {
+            systemPrompt += `\n\n**Current Draft:**\n${context.currentDraft}`;
+          }
+          if (context.userPreferences) {
+            systemPrompt += `\n\n**User Preferences:**`;
+            if (context.userPreferences.tone) {
+              systemPrompt += `\n- Preferred tone: ${context.userPreferences.tone}`;
+            }
+            if (context.userPreferences.length) {
+              systemPrompt += `\n- Preferred length: ${context.userPreferences.length}`;
+            }
+          }
+          if (context.conversationHistory && context.conversationHistory.length > 0) {
+            systemPrompt += `\n\n**Conversation History:**`;
+            context.conversationHistory.forEach((msg: any) => {
+              systemPrompt += `\n${msg.role}: ${msg.content}`;
+            });
+          }
+        }
+
+        // Add conversation history if provided separately
+        if (conversationHistory && conversationHistory.length > 0) {
+          systemPrompt += `\n\n**Conversation History:**`;
+          conversationHistory.forEach((msg: any) => {
+            systemPrompt += `\n${msg.role}: ${msg.content}`;
+          });
+        }
+
+        // Get tools and call LLM with function calling
+        // Define the available tools (matching what's registered in the server)
+        const availableTools = [
+          {
+            name: "summarizeEmail",
+            description:
+              "📊 SUMMARIZE EMAIL: Extract key bullet points and main topics from email content. Use when user asks to 'summarize', 'key points', or 'what's this about'. IMPORTANT: Use the actual email content from the Email Thread context.",
+            parameters: {
+              type: "object",
+              properties: {
+                text: {
+                  type: "string",
+                  description: "The actual email text from the Email Thread context to summarize",
+                },
+              },
+              required: ["text"],
+            },
+          },
+          {
+            name: "draftReply",
+            description:
+              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+            parameters: {
+              type: "object",
+              properties: {
+                email: {
+                  type: "string",
+                  description:
+                    "Copy the email body text from the Email Thread context. Find the line starting with 'Body:' and copy everything after it exactly as written.",
+                },
+                tone: {
+                  type: "string",
+                  enum: ["professional", "casual", "formal"],
+                  description: "The tone of the reply",
+                },
+              },
+              required: ["email"],
+            },
+          },
+          {
+            name: "analyzeEmail",
+            description:
+              "🔍 ANALYZE EMAIL: Provide structured insights and analysis of email content. Use when user asks to 'analyze this email' or 'what does this email say'",
+            parameters: {
+              type: "object",
+              properties: {
+                emailContent: {
+                  type: "object",
+                  properties: {
+                    subject: { type: "string" },
+                    sender: { type: "string" },
+                    recipients: { type: "object" },
+                    body: { type: "string" },
+                  },
+                  required: ["subject", "sender", "recipients", "body"],
+                },
+              },
+              required: ["emailContent"],
+            },
+          },
+          {
+            name: "rewriteReply",
+            description:
+              "✏️ REWRITE REPLY: Improve and rewrite an existing email draft. Use when user asks to 'rewrite', 'make this better', or 'improve this'",
+            parameters: {
+              type: "object",
+              properties: {
+                draft: { type: "string" },
+                instruction: { type: "string" },
+              },
+              required: ["draft", "instruction"],
+            },
+          },
+        ];
+
+        const functions = availableTools;
+
+        const response = await callLLMWithTools(prompt, functions, systemPrompt, server);
+
+        // Check if the response contains action protocol (object)
+        let responseData: any = { response };
+        if (typeof response === "object" && response.shouldPerformAction && response.actionToPerform) {
+          // Extract action protocol fields
+          responseData = {
+            response: response.content?.[0]?.text || response.content,
+            shouldPerformAction: response.shouldPerformAction,
+            actionToPerform: response.actionToPerform,
+          };
+        }
+
+        res.json({
+          success: true,
+          ...responseData,
           prompt: prompt,
           contextProvided: context ? "Yes" : "No",
           emailId: context?.emailId || null,

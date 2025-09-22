@@ -19,8 +19,18 @@ export const summarizeEmailTool = {
     const validatedInput = SummarizeEmailInputSchema.parse({ text });
     const prompt = `Summarize this email in 3 bullet points:\n\n${validatedInput.text}`;
     const summary = await callLLM(prompt);
+
+    // Return structured response with action protocol
     return {
       content: [{ type: "text" as const, text: summary }],
+      shouldPerformAction: true,
+      actionToPerform: {
+        action: "summarizeEmail",
+        description: "Summarize the email content into key bullet points",
+        parameters: {
+          text: validatedInput.text,
+        },
+      },
     };
   },
 };

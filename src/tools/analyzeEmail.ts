@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { callLLM } from "../llm.js";
 import { AnalyzeEmailInputSchema, EmailContentSchema } from "../schemas.js";
 
@@ -68,12 +67,28 @@ Guidelines:
         const validatedAnalysis = validateAnalysis(analysis);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(validatedAnalysis, null, 2) }],
+          shouldPerformAction: true,
+          actionToPerform: {
+            action: "analyzeEmail",
+            description: "Analyze the email content with structured insights",
+            parameters: {
+              emailContent: validatedEmailContent,
+            },
+          },
         };
       } catch (parseError) {
         console.error("Error parsing AI response:", parseError);
         const fallbackAnalysis = generateFallbackAnalysis(validatedEmailContent, textContent);
         return {
           content: [{ type: "text" as const, text: JSON.stringify(fallbackAnalysis, null, 2) }],
+          shouldPerformAction: true,
+          actionToPerform: {
+            action: "analyzeEmail",
+            description: "Analyze the email content with structured insights",
+            parameters: {
+              emailContent: validatedEmailContent,
+            },
+          },
         };
       }
     } catch (error) {
@@ -81,6 +96,14 @@ Guidelines:
       const fallbackAnalysis = generateFallbackAnalysis(validatedEmailContent, validatedEmailContent.body || "");
       return {
         content: [{ type: "text" as const, text: JSON.stringify(fallbackAnalysis, null, 2) }],
+        shouldPerformAction: true,
+        actionToPerform: {
+          action: "analyzeEmail",
+          description: "Analyze the email content with structured insights",
+          parameters: {
+            emailContent: validatedEmailContent,
+          },
+        },
       };
     }
   },

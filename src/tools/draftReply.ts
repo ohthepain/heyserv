@@ -17,6 +17,7 @@ export const draftReplyTool = {
     openWorldHint: false,
   },
   handler: async ({ email, tone = "polite" }: { email: string; tone?: string }) => {
+    console.log("draftReplyTool handler called with email:", email);
     const validatedInput = DraftReplyInputSchema.parse({ email, tone });
 
     const prompt = `You are a professional email assistant. Write a complete, well-structured reply to the following email. The reply should be ${validatedInput.tone} in tone.
@@ -37,8 +38,18 @@ ${validatedInput.email}
 Write a complete, professional reply:`;
 
     const reply = await callLLM(prompt);
+
+    // Return structured response with action protocol
     return {
       content: [{ type: "text" as const, text: reply }],
+      shouldPerformAction: true,
+      actionToPerform: {
+        action: "draftReply",
+        description: "Draft a reply to the email with the specified tone",
+        parameters: {
+          email: validatedInput.email,
+        },
+      },
     };
   },
 };

@@ -70,7 +70,7 @@ class MCPClient {
     }
   }
 
-  async chatLoop() {
+  async httpChatLoop() {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -82,7 +82,9 @@ class MCPClient {
       console.log("📋 Available tools:", this.tools.map((t) => t.name).join(", "));
 
       while (true) {
-        const message = await rl.question("\n💭 Query: ");
+        const message = await new Promise<string>((resolve) => {
+          rl.question("\n💭 Query: ", resolve);
+        });
         if (!message || message.toLowerCase() === "quit") {
           break;
         }
@@ -191,7 +193,7 @@ async function main() {
   console.log("✅ Client connected to MCP server");
 
   // Start interactive chat loop
-  await client.chatLoop();
+  await client.httpChatLoop();
 
   // Cleanup
   await client.cleanup();
