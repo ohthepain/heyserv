@@ -10,6 +10,7 @@ A modern Model Context Protocol (MCP) server that provides AI-powered Gmail tool
 - **Content Rewriting**: Improve and modify email drafts based on instructions
 - **Modern MCP**: Built with `McpServer` and `registerTool` for clean, maintainable code
 - **MCP Tool Hints**: Proper `readOnlyHint` and `idempotentHint` annotations for better client integration
+- **Tool Debugging**: Built-in debugging hints showing which MCP tools were used to generate responses
 - **Modular Architecture**: Each tool in its own file for better organization and maintainability
 - **Type Safety**: Full Zod validation and TypeScript integration
 - **Runtime Validation**: Comprehensive input/output validation with detailed error messages
@@ -496,6 +497,46 @@ const emailSchema = z.string().email("Invalid sender email address");
 ## License
 
 ISC
+
+## Debugging Tool Usage
+
+The server now includes built-in debugging information to help you understand which MCP tools were used to generate responses. This is particularly useful for:
+
+- **Development**: Understanding tool execution flow
+- **Debugging**: Identifying which tools were called and their success/failure status
+- **Optimization**: Monitoring tool usage patterns
+- **Troubleshooting**: Seeing detailed error information when tools fail
+
+### Debugging Information Structure
+
+Each response includes:
+
+- `toolsUsed`: Array of tools executed with timestamps and success status
+- `debuggingInfo`: Summary with tool count, names, and execution status
+
+### Example
+
+```json
+{
+  "success": true,
+  "response": "I've analyzed and summarized your email.",
+  "toolsUsed": [
+    {
+      "name": "analyzeEmail",
+      "arguments": { "emailContent": {...} },
+      "timestamp": "2024-01-15T10:30:45.123Z",
+      "success": true
+    }
+  ],
+  "debuggingInfo": {
+    "toolsExecuted": 1,
+    "toolsList": ["analyzeEmail"],
+    "executionSummary": "analyzeEmail ✅"
+  }
+}
+```
+
+See [DEBUGGING-EXAMPLE.md](./DEBUGGING-EXAMPLE.md) for detailed examples and testing instructions.
 
 ## Contributing
 

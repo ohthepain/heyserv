@@ -109,6 +109,15 @@ async function callLLMWithTools(
     { role: "user", content: prompt },
   ];
 
+  // Track which tools were used during execution
+  const toolsUsed: Array<{
+    name: string;
+    arguments: any;
+    timestamp: string;
+    success: boolean;
+    error?: string;
+  }> = [];
+
   console.log(
     "🔧 Calling OpenAI with functions:",
     functions.map((f) => f.name)
@@ -132,6 +141,10 @@ async function callLLMWithTools(
     const functionArgs = JSON.parse(message.function_call.arguments || "{}");
 
     console.log(`🔧 Calling tool: ${functionName}`, functionArgs);
+
+    const toolStartTime = new Date().toISOString();
+    let toolSuccess = false;
+    let toolError: string | undefined;
 
     try {
       // Call the MCP tool via HTTP request to the /mcp endpoint
@@ -159,14 +172,34 @@ async function callLLMWithTools(
       }
 
       const toolResult = toolResponseJson.result;
+      toolSuccess = true;
 
       // Check if the tool returned an action protocol - if so, return it directly
       if (toolResult.shouldPerformAction && toolResult.actionToPerform) {
         console.log("🔧 Tool returned action protocol, returning directly");
+
+        // Record tool usage before returning
+        toolsUsed.push({
+          name: functionName,
+          arguments: functionArgs,
+          timestamp: toolStartTime,
+          success: toolSuccess,
+        });
+
+        // Create debugging info with proper deduplication
+        const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
+        const debuggingInfo = {
+          toolsExecuted: toolsUsed.length,
+          toolsList: uniqueToolNames,
+          executionSummary: toolsUsed.map((t) => `${t.name}${t.success ? " ✅" : " ❌"}`).join(", "),
+        };
+
         return {
           content: toolResult.content,
           shouldPerformAction: toolResult.shouldPerformAction,
           actionToPerform: toolResult.actionToPerform,
+          toolsUsed: toolsUsed,
+          debuggingInfo: debuggingInfo,
         };
       }
 
@@ -194,13 +227,43 @@ async function callLLMWithTools(
       message = response.choices[0].message;
     } catch (error) {
       console.error(`❌ Error calling tool ${functionName}:`, error);
+      toolError = error instanceof Error ? error.message : String(error);
       // Return error message instead of breaking
       return `Error calling tool ${functionName}: ${error}`;
+    } finally {
+      // Record tool usage regardless of success/failure
+      toolsUsed.push({
+        name: functionName,
+        arguments: functionArgs,
+        timestamp: toolStartTime,
+        success: toolSuccess,
+        error: toolError,
+      });
     }
   }
 
   console.log("✅ Function calling complete, final message:", message?.content || "No content");
-  return message?.content || "No response generated";
+
+  // Return response with debugging information
+  const finalResponse = message?.content || "No response generated";
+
+  // If we have tools used, wrap the response with debugging info
+  if (toolsUsed.length > 0) {
+    const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
+    const debuggingInfo = {
+      toolsExecuted: toolsUsed.length,
+      toolsList: uniqueToolNames,
+      executionSummary: toolsUsed.map((t) => `${t.name}${t.success ? " ✅" : " ❌"}`).join(", "),
+    };
+
+    return {
+      content: finalResponse,
+      toolsUsed: toolsUsed,
+      debuggingInfo: debuggingInfo,
+    };
+  }
+
+  return finalResponse;
 }
 
 // Streaming version of callLLMWithTools
@@ -217,6 +280,15 @@ async function* callLLMWithToolsStream(
     { role: "system", content: systemPrompt },
     { role: "user", content: prompt },
   ];
+
+  // Track which tools were used during execution
+  const toolsUsed: Array<{
+    name: string;
+    arguments: any;
+    timestamp: string;
+    success: boolean;
+    error?: string;
+  }> = [];
 
   console.log(
     "🔧 Calling OpenAI with functions (streaming):",
@@ -273,6 +345,10 @@ async function* callLLMWithToolsStream(
 
       console.log(`🔧 Calling tool: ${functionName}`, functionArgs);
 
+      const toolStartTime = new Date().toISOString();
+      let toolSuccess = false;
+      let toolError: string | undefined;
+
       // Call the MCP tool
       const toolResponse = await fetch("http://localhost:4000/mcp", {
         method: "POST",
@@ -298,15 +374,33 @@ async function* callLLMWithToolsStream(
       }
 
       const toolResult = toolResponseJson.result;
+      toolSuccess = true;
+
+      // Record tool usage
+      toolsUsed.push({
+        name: functionName,
+        arguments: functionArgs,
+        timestamp: toolStartTime,
+        success: toolSuccess,
+      });
 
       // Check if the tool returned an action protocol
       if (toolResult.shouldPerformAction && toolResult.actionToPerform) {
+        const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
+        const debuggingInfo = {
+          toolsExecuted: toolsUsed.length,
+          toolsList: uniqueToolNames,
+          executionSummary: toolsUsed.map((t) => `${t.name}${t.success ? " ✅" : " ❌"}`).join(", "),
+        };
+
         yield {
           type: "action_protocol",
           data: {
             content: toolResult.content,
             shouldPerformAction: toolResult.shouldPerformAction,
             actionToPerform: toolResult.actionToPerform,
+            toolsUsed: toolsUsed,
+            debuggingInfo: debuggingInfo,
           },
         };
         return;
@@ -346,9 +440,32 @@ async function* callLLMWithToolsStream(
         }
       }
 
-      yield { type: "complete", data: { message: finalMessage } };
+      const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
+      const debuggingInfo = {
+        toolsExecuted: toolsUsed.length,
+        toolsList: uniqueToolNames,
+        executionSummary: toolsUsed.map((t) => `${t.name}${t.success ? " ✅" : " ❌"}`).join(", "),
+      };
+
+      yield {
+        type: "complete",
+        data: {
+          message: finalMessage,
+          toolsUsed: toolsUsed,
+          debuggingInfo: debuggingInfo,
+        },
+      };
     } catch (error: any) {
       console.error(`❌ Error calling tool ${functionCall.name}:`, error);
+
+      // Record failed tool usage
+      toolsUsed.push({
+        name: functionCall.name,
+        arguments: JSON.parse(functionCallBuffer),
+        timestamp: new Date().toISOString(),
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
       yield { type: "error", data: { error: error.message } };
     }
   } else {
@@ -789,6 +906,16 @@ async function main() {
             response: response.content?.[0]?.text || response.content,
             shouldPerformAction: response.shouldPerformAction,
             actionToPerform: response.actionToPerform,
+            // Include debugging info if available
+            toolsUsed: response.toolsUsed || [],
+            debuggingInfo: response.debuggingInfo || null,
+          };
+        } else if (typeof response === "object" && response.toolsUsed) {
+          // Handle responses with tool tracking but no action protocol
+          responseData = {
+            response: response.content || response,
+            toolsUsed: response.toolsUsed,
+            debuggingInfo: response.debuggingInfo,
           };
         }
 
