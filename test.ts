@@ -52,22 +52,43 @@ const ToolResponseSchema = z.object({
   }),
 });
 
-const ChatResponseSchema = z.object({
-  success: z.boolean(),
-  response: z.string(),
-  shouldPerformAction: z.boolean(),
-  actionToPerform: z.object({
-    action: z.string(),
-    description: z.string().optional(),
-    parameters: z.record(z.any()),
-  }),
-  prompt: z.string(),
-  contextProvided: z.string(),
-  emailId: z.string().nullable(),
-  hasEmailThread: z.string(),
-  hasCurrentDraft: z.string(),
-  conversationHistoryLength: z.number(),
-});
+const ChatResponseSchema = z
+  .object({
+    success: z.boolean(),
+    response: z.string(),
+    shouldPerformAction: z.boolean(),
+    actionToPerform: z.object({
+      action: z.string(),
+      description: z.string().optional(),
+      parameters: z.record(z.any()),
+    }),
+    prompt: z.string(),
+    contextProvided: z.string(),
+    emailId: z.string().nullable(),
+    hasEmailThread: z.string(),
+    hasCurrentDraft: z.string(),
+    conversationHistoryLength: z.number(),
+    // Optional debugging fields - allow for extensible response structure
+    toolsUsed: z
+      .array(
+        z.object({
+          name: z.string(),
+          arguments: z.any(),
+          timestamp: z.string(),
+          success: z.boolean(),
+          error: z.string().optional(),
+        })
+      )
+      .optional(),
+    debuggingInfo: z
+      .object({
+        toolsExecuted: z.number(),
+        toolsList: z.array(z.string()),
+        executionSummary: z.string(),
+      })
+      .optional(),
+  })
+  .passthrough(); // Allow additional fields we haven't defined yet
 
 const StatusResponseSchema = z.object({
   name: z.string(),

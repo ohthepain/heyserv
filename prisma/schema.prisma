@@ -19,11 +19,115 @@ model Contact {
   updatedAt DateTime @updatedAt
 
   // Relations
-  emails   Email[]
+  history ContactHistory[]
+  emails  Email[]
   memories Memory[]
 
   @@map("contacts")
   @@index([email])
+}
+
+model ContactHistory {
+  id        String   @id @default(cuid())
+  contactId String
+  action    String   // "created", "updated", "deleted"
+  details   Json?
+  timestamp DateTime @default(now())
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@map("contact_history")
+  @@index([contactId])
+  @@index([timestamp])
+}
+
+// Normalized User Profile System
+model UserProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  signoffs     UserSignoff[]
+  spacing      UserSpacing?
+  defaults     UserDefaults?
+  signature    UserSignature?
+  names        UserNames?
+
+  @@map("user_profiles")
+  @@index([userId])
+}
+
+model UserSignoff {
+  id        String   @id @default(cuid())
+  userId    String
+  tone      String   // professional, casual, formal, friendly, polite, urgent, apologetic, neutral
+  signoff   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@unique([userId, tone])
+  @@index([userId])
+  @@map("user_signoffs")
+}
+
+model UserSpacing {
+  id                        String   @id @default(cuid())
+  userId                    String   @unique
+  blankLineBeforeSignoff    Boolean  @default(true)
+  blankLineBeforeName       Boolean  @default(true)
+  blankLineAfterSalutation  Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  profile UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_spacing")
+}
+
+model UserDefaults {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  defaultTone       String   @default("professional")
+  defaultSignoff    String?
+  includeSignature  Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  profile UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_defaults")
+}
+
+model UserSignature {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  text            String   @default("")
+  html            String   @default("")
+  includeInEmails Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  profile UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_signatures")
+}
+
+model UserNames {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  formal       String   @default("")
+  casual       String   @default("")
+  professional String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile UserProfile @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_names")
 }
 
 model Email {
@@ -49,70 +153,49 @@ model Email {
   contactId String
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
-  // Foreign key to thread
-  threadId String
-  thread   Thread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-
   // Relations
-  memories Memory[]
+  threads EmailThread[]
 
   @@map("emails")
-  @@index([gmailId])
-  @@index([senderEmail])
+  @@index([contactId])
   @@index([receivedAt])
-  @@index([threadId])
 }
 
-model Thread {
-  id             String   @id @default(cuid())
-  gmailThreadId  String   @unique // Gmail's unique thread ID
-  subject        String?
-  lastMessageAt  DateTime // When the last message in thread was received
-  messageCount   Int      @default(1) // Number of messages in thread
-  isRead         Boolean  @default(false)
-  isImportant    Boolean  @default(false)
-  isStarred      Boolean  @default(false)
-  labels         String[] // Gmail labels for the thread
-  participants   String[] // Array of all participant emails in thread
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model EmailThread {
+  id        String   @id @default(cuid())
+  threadId  String   @unique // Gmail thread ID
+  subject   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Foreign key to email
+  emailId String
+  email   Email @relation(fields: [emailId], references: [id], onDelete: Cascade)
 
   // Relations
-  emails   Email[]
   memories Memory[]
 
-  @@map("threads")
-  @@index([gmailThreadId])
-  @@index([lastMessageAt])
-  @@index([participants])
+  @@map("email_threads")
+  @@index([emailId])
 }
 
 model Memory {
-  id          String   @id @default(cuid())
-  text        String   // Description of the memory
-  memoryType  String?  // Type of memory (e.g., "action_item", "important_info", "follow_up")
-  priority    Int      @default(1) // Priority level 1-5
-  isCompleted Boolean  @default(false) // For action items
-  dueDate     DateTime? // Optional due date for action items
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(cuid())
+  content   String
+  type      String   // "note", "reminder", "tag", etc.
+  metadata  Json?    // Additional metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   // Foreign key to contact
   contactId String
   contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
-  // Optional foreign keys to email and thread
-  emailId String?
-  email   Email?  @relation(fields: [emailId], references: [id], onDelete: SetNull)
-
+  // Foreign key to thread (optional)
   threadId String?
-  thread   Thread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  thread   EmailThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
 
   @@map("memories")
   @@index([contactId])
-  @@index([emailId])
   @@index([threadId])
-  @@index([memoryType])
-  @@index([isCompleted])
-  @@index([dueDate])
 }

@@ -276,11 +276,9 @@ export const createMemoryTool = {
       }
       const result = await contactsService.createMemory({
         contactId: contact.id,
-        text,
-        memoryType,
-        priority,
-        dueDate: dueDate ? new Date(dueDate) : undefined,
-        emailId,
+        content: text,
+        type: memoryType,
+        metadata: { priority, dueDate: dueDate ? new Date(dueDate) : undefined },
         threadId,
       });
       return {
@@ -344,8 +342,7 @@ export const getMemoriesTool = {
         };
       }
       const result = await contactsService.getMemoriesByContact(contact.id, {
-        memoryType,
-        isCompleted,
+        type: memoryType,
       });
       const limitedResult = result.slice(0, limit);
       return {

@@ -47,7 +47,6 @@ export class ContactsService {
         _count: {
           select: {
             emails: true,
-            memories: true,
           },
         },
       },
@@ -100,8 +99,7 @@ export class ContactsService {
       where: { gmailId },
       include: {
         contact: true,
-        thread: true,
-        memories: true,
+        threads: true,
       },
     });
   }
@@ -110,8 +108,7 @@ export class ContactsService {
     return await prisma.email.findMany({
       where: { contactId },
       include: {
-        thread: true,
-        memories: true,
+        threads: true,
       },
       orderBy: { receivedAt: "desc" },
       take: limit,
@@ -136,8 +133,7 @@ export class ContactsService {
       where: whereClause,
       include: {
         contact: true,
-        thread: true,
-        memories: true,
+        threads: true,
       },
       orderBy: { receivedAt: "desc" },
     });
@@ -159,80 +155,63 @@ export class ContactsService {
 
   // ==================== THREAD OPERATIONS ====================
 
-  async createThread(data: {
-    gmailThreadId: string;
-    subject?: string;
-    participants: string[];
-    lastMessageAt: Date;
-    messageCount?: number;
-    labels?: string[];
-  }) {
-    return await prisma.thread.create({
+  async createThread(data: { threadId: string; subject?: string; emailId: string }) {
+    return await prisma.emailThread.create({
       data: {
-        ...data,
-        messageCount: data.messageCount || 1,
-        labels: data.labels || [],
+        threadId: data.threadId,
+        subject: data.subject,
+        emailId: data.emailId,
       },
     });
   }
 
-  async findThreadByGmailId(gmailThreadId: string) {
-    return await prisma.thread.findUnique({
-      where: { gmailThreadId },
+  async findThreadByGmailId(threadId: string) {
+    return await prisma.emailThread.findUnique({
+      where: { threadId },
       include: {
-        emails: {
+        email: {
           include: {
             contact: true,
-            memories: true,
           },
-          orderBy: { receivedAt: "asc" },
         },
-        memories: true,
       },
     });
   }
 
   async getThreadsByContact(contactId: string, limit = 50) {
-    return await prisma.thread.findMany({
+    return await prisma.emailThread.findMany({
       where: {
-        emails: {
-          some: { contactId },
+        email: {
+          contactId,
         },
       },
       include: {
-        emails: {
-          where: { contactId },
+        email: {
           include: { contact: true },
         },
-        memories: true,
       },
-      orderBy: { lastMessageAt: "desc" },
+      orderBy: { createdAt: "desc" },
       take: limit,
     });
   }
 
   async updateThreadLastMessage(threadId: string, lastMessageAt: Date) {
-    return await prisma.thread.update({
+    return await prisma.emailThread.update({
       where: { id: threadId },
-      data: { lastMessageAt },
+      data: { updatedAt: lastMessageAt },
     });
   }
 
   // ==================== MEMORY OPERATIONS ====================
 
-  async createMemory(data: {
-    contactId: string;
-    text: string;
-    memoryType?: string;
-    priority?: number;
-    dueDate?: Date;
-    emailId?: string;
-    threadId?: string;
-  }) {
+  async createMemory(data: { contactId: string; content: string; type?: string; metadata?: any; threadId?: string }) {
     return await prisma.memory.create({
       data: {
-        ...data,
-        priority: data.priority || 1,
+        contactId: data.contactId,
+        content: data.content,
+        type: data.type || "note",
+        metadata: data.metadata,
+        threadId: data.threadId,
       },
     });
   }
@@ -240,22 +219,17 @@ export class ContactsService {
   async getMemoriesByContact(
     contactId: string,
     options?: {
-      emailId?: string;
       threadId?: string;
-      memoryType?: string;
-      isCompleted?: boolean;
+      type?: string;
     }
   ) {
     const whereClause: any = { contactId };
-    if (options?.emailId) whereClause.emailId = options.emailId;
     if (options?.threadId) whereClause.threadId = options.threadId;
-    if (options?.memoryType) whereClause.memoryType = options.memoryType;
-    if (options?.isCompleted !== undefined) whereClause.isCompleted = options.isCompleted;
+    if (options?.type) whereClause.type = options.type;
 
     return await prisma.memory.findMany({
       where: whereClause,
       include: {
-        email: true,
         thread: true,
       },
       orderBy: { createdAt: "desc" },
@@ -265,11 +239,9 @@ export class ContactsService {
   async updateMemory(
     id: string,
     data: {
-      text?: string;
-      memoryType?: string;
-      priority?: number;
-      isCompleted?: boolean;
-      dueDate?: Date;
+      content?: string;
+      type?: string;
+      metadata?: any;
     }
   ) {
     return await prisma.memory.update({
@@ -281,7 +253,7 @@ export class ContactsService {
   async markMemoryAsCompleted(id: string) {
     return await prisma.memory.update({
       where: { id },
-      data: { isCompleted: true },
+      data: { metadata: { isCompleted: true } },
     });
   }
 
@@ -294,22 +266,21 @@ export class ContactsService {
   // ==================== ANALYTICS ====================
 
   async getContactStats(contactId: string) {
-    const [totalEmails, unreadEmails, starredEmails, totalMemories, completedMemories] = await Promise.all([
+    const [totalEmails, unreadEmails, starredEmails, totalMemories] = await Promise.all([
       prisma.email.count({ where: { contactId } }),
       prisma.email.count({ where: { contactId, isRead: false } }),
       prisma.email.count({ where: { contactId, isStarred: true } }),
       prisma.memory.count({ where: { contactId } }),
-      prisma.memory.count({ where: { contactId, isCompleted: true } }),
     ]);
 
-    return { totalEmails, unreadEmails, starredEmails, totalMemories, completedMemories };
+    return { totalEmails, unreadEmails, starredEmails, totalMemories };
   }
 
   async getGlobalStats() {
     const [totalContacts, totalEmails, totalThreads, totalMemories] = await Promise.all([
       prisma.contact.count(),
       prisma.email.count(),
-      prisma.thread.count(),
+      prisma.emailThread.count(),
       prisma.memory.count(),
     ]);
 
@@ -321,29 +292,27 @@ export class ContactsService {
   async searchAll(query: string, contactId?: string) {
     const [emails, threads, memories] = await Promise.all([
       this.searchEmails(query, contactId),
-      prisma.thread.findMany({
+      prisma.emailThread.findMany({
         where: {
-          OR: [{ subject: { contains: query, mode: "insensitive" } }, { participants: { has: query } }],
+          subject: { contains: query, mode: "insensitive" },
           ...(contactId && {
-            emails: { some: { contactId } },
+            email: { contactId },
           }),
         },
         include: {
-          emails: {
-            ...(contactId && { where: { contactId } }),
+          email: {
             include: { contact: true },
           },
         },
-        orderBy: { lastMessageAt: "desc" },
+        orderBy: { createdAt: "desc" },
       }),
       prisma.memory.findMany({
         where: {
-          text: { contains: query, mode: "insensitive" },
+          content: { contains: query, mode: "insensitive" },
           ...(contactId && { contactId }),
         },
         include: {
           contact: true,
-          email: true,
           thread: true,
         },
         orderBy: { createdAt: "desc" },

@@ -174,17 +174,17 @@ async function callLLMWithTools(
       const toolResult = toolResponseJson.result;
       toolSuccess = true;
 
+      // Record tool usage before checking action protocol
+      toolsUsed.push({
+        name: functionName,
+        arguments: functionArgs,
+        timestamp: toolStartTime,
+        success: toolSuccess,
+      });
+
       // Check if the tool returned an action protocol - if so, return it directly
       if (toolResult.shouldPerformAction && toolResult.actionToPerform) {
         console.log("🔧 Tool returned action protocol, returning directly");
-
-        // Record tool usage before returning
-        toolsUsed.push({
-          name: functionName,
-          arguments: functionArgs,
-          timestamp: toolStartTime,
-          success: toolSuccess,
-        });
 
         // Create debugging info with proper deduplication
         const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
@@ -228,17 +228,16 @@ async function callLLMWithTools(
     } catch (error) {
       console.error(`❌ Error calling tool ${functionName}:`, error);
       toolError = error instanceof Error ? error.message : String(error);
-      // Return error message instead of breaking
-      return `Error calling tool ${functionName}: ${error}`;
-    } finally {
-      // Record tool usage regardless of success/failure
+      // Record failed tool usage
       toolsUsed.push({
         name: functionName,
         arguments: functionArgs,
         timestamp: toolStartTime,
-        success: toolSuccess,
+        success: false,
         error: toolError,
       });
+      // Return error message instead of breaking
+      return `Error calling tool ${functionName}: ${error}`;
     }
   }
 
@@ -337,17 +336,16 @@ async function* callLLMWithToolsStream(
 
   // If we have a complete function call, process it
   if (functionCall && functionCallBuffer) {
-    try {
-      const functionArgs = JSON.parse(functionCallBuffer);
-      const functionName = functionCall.name;
+    const functionArgs = JSON.parse(functionCallBuffer);
+    const functionName = functionCall.name;
+    const toolStartTime = new Date().toISOString();
+    let toolSuccess = false;
+    let toolError: string | undefined;
 
+    try {
       yield { type: "function_call_complete", data: { name: functionName, arguments: functionArgs } };
 
       console.log(`🔧 Calling tool: ${functionName}`, functionArgs);
-
-      const toolStartTime = new Date().toISOString();
-      let toolSuccess = false;
-      let toolError: string | undefined;
 
       // Call the MCP tool
       const toolResponse = await fetch("http://localhost:4000/mcp", {
@@ -376,7 +374,7 @@ async function* callLLMWithToolsStream(
       const toolResult = toolResponseJson.result;
       toolSuccess = true;
 
-      // Record tool usage
+      // Record tool usage before checking action protocol
       toolsUsed.push({
         name: functionName,
         arguments: functionArgs,
@@ -457,14 +455,14 @@ async function* callLLMWithToolsStream(
       };
     } catch (error: any) {
       console.error(`❌ Error calling tool ${functionCall.name}:`, error);
-
+      toolError = error instanceof Error ? error.message : String(error);
       // Record failed tool usage
       toolsUsed.push({
-        name: functionCall.name,
-        arguments: JSON.parse(functionCallBuffer),
-        timestamp: new Date().toISOString(),
+        name: functionName,
+        arguments: functionArgs,
+        timestamp: toolStartTime,
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: toolError,
       });
       yield { type: "error", data: { error: error.message } };
     }
@@ -1160,6 +1158,149 @@ async function main() {
       }
     });
 
+    // Profile API endpoints
+    app.get("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.getOrCreateProfile(userId);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to get profile", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { emailPreferences } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateProfile(userId, emailPreferences);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update profile", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/signoff", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { tone, signoff } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSignoff(userId, tone, signoff);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update signoff", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/spacing", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { spacing } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSpacing(userId, spacing);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update spacing", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/defaults", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { defaults } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateDefaults(userId, defaults);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update defaults", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/signature", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { signature } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSignature(userId, signature);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update signature", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/names", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { names } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateNames(userId, names);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update names", details: error.message });
+      }
+    });
+
+    app.delete("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        await profileService.deleteProfile(userId);
+        res.json({
+          success: true,
+          message: "Profile deleted successfully",
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to delete profile", details: error.message });
+      }
+    });
+
+    app.post("/profile/:userId/reset", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.resetProfile(userId);
+        res.json({
+          success: true,
+          profile: profile,
+          message: "Profile reset to defaults",
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to reset profile", details: error.message });
+      }
+    });
+
     // Add a simple status endpoint
     app.get("/", (req, res) => {
       res.json({
@@ -1182,6 +1323,17 @@ async function main() {
           "getMemories",
           "getContactStats",
           "getGlobalStats",
+        ],
+        profileEndpoints: [
+          "GET /profile/:userId - Get user profile",
+          "PUT /profile/:userId - Update user profile",
+          "PUT /profile/:userId/signoff - Update signoff for tone",
+          "PUT /profile/:userId/spacing - Update spacing preferences",
+          "PUT /profile/:userId/defaults - Update default preferences",
+          "PUT /profile/:userId/signature - Update signature preferences",
+          "PUT /profile/:userId/names - Update name preferences",
+          "DELETE /profile/:userId - Delete user profile",
+          "POST /profile/:userId/reset - Reset profile to defaults",
         ],
         mcpEndpoint: "/mcp",
         promptEndpoint: "/prompt",
@@ -1478,7 +1630,163 @@ async function main() {
           "getGlobalStats",
         ],
         mcpEndpoint: "/mcp",
+        promptEndpoint: "/prompt",
+        chatEndpoint: "/chat",
+        profileEndpoints: [
+          "GET /profile/:userId - Get user profile",
+          "PUT /profile/:userId - Update user profile",
+          "PUT /profile/:userId/signoff - Update signoff for tone",
+          "PUT /profile/:userId/spacing - Update spacing preferences",
+          "PUT /profile/:userId/defaults - Update default preferences",
+          "PUT /profile/:userId/signature - Update signature preferences",
+          "PUT /profile/:userId/names - Update name preferences",
+          "DELETE /profile/:userId - Delete user profile",
+          "POST /profile/:userId/reset - Reset profile to defaults",
+        ],
       });
+    });
+
+    // Profile API endpoints
+    app.get("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.getOrCreateProfile(userId);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to get profile", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { emailPreferences } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateProfile(userId, emailPreferences);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update profile", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/signoff", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { tone, signoff } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSignoff(userId, tone, signoff);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update signoff", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/spacing", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { spacing } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSpacing(userId, spacing);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update spacing", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/defaults", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { defaults } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateDefaults(userId, defaults);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update defaults", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/signature", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { signature } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateSignature(userId, signature);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update signature", details: error.message });
+      }
+    });
+
+    app.put("/profile/:userId/names", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const { names } = req.body;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.updateNames(userId, names);
+        res.json({
+          success: true,
+          profile: profile,
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to update names", details: error.message });
+      }
+    });
+
+    app.delete("/profile/:userId", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        await profileService.deleteProfile(userId);
+        res.json({
+          success: true,
+          message: "Profile deleted successfully",
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to delete profile", details: error.message });
+      }
+    });
+
+    app.post("/profile/:userId/reset", async (req, res) => {
+      try {
+        const { userId } = req.params;
+        const profileService = new (await import("./services/profileService.js")).ProfileService();
+
+        const profile = await profileService.resetProfile(userId);
+        res.json({
+          success: true,
+          profile: profile,
+          message: "Profile reset to defaults",
+        });
+      } catch (error: any) {
+        res.status(500).json({ error: "Failed to reset profile", details: error.message });
+      }
     });
 
     app.listen(port, () => {

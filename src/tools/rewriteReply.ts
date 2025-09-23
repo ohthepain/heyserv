@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { callLLM } from "../llm.js";
 import { RewriteReplyInputSchema } from "../schemas.js";
+import { ProfileService } from "../services/profileService.js";
 
 export const rewriteReplyTool = {
   name: "rewriteReply",
@@ -9,6 +10,7 @@ export const rewriteReplyTool = {
   inputSchema: {
     draft: z.string().min(1, "Email draft is required"),
     instruction: z.string().min(1, "Rewrite instruction is required"),
+    userId: z.string().optional(), // Optional user ID for profile preferences
   },
   annotations: {
     readOnlyHint: true,
@@ -16,8 +18,20 @@ export const rewriteReplyTool = {
     destructiveHint: false,
     openWorldHint: false,
   },
-  handler: async ({ draft, instruction }: { draft: string; instruction: string }) => {
+  handler: async ({ draft, instruction, userId }: { draft: string; instruction: string; userId?: string }) => {
     const validatedInput = RewriteReplyInputSchema.parse({ draft, instruction });
+
+    // Get user profile preferences if userId is provided
+    let userPreferences = null;
+    if (userId) {
+      try {
+        const profileService = new ProfileService();
+        const profile = await profileService.getOrCreateProfile(userId);
+        userPreferences = profile.emailPreferences;
+      } catch (error) {
+        console.warn("Failed to load user profile, using defaults:", error);
+      }
+    }
     const prompt = `You are a professional email assistant. Here is a draft email:
 
 ${validatedInput.draft}
