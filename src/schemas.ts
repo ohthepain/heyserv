@@ -1,5 +1,48 @@
 import { z } from "zod";
 
+// Suggested action schema for when LLM needs clarification
+export const SuggestedActionSchema = z.object({
+  label: z.string().describe("Human-readable label for the action button"),
+  prompt: z.string().describe("The exact prompt to send when this action is clicked"),
+  description: z.string().optional().describe("Optional description of what this action does"),
+});
+
+// Chat response schema with suggested actions
+export const ChatResponseSchema = z.object({
+  success: z.boolean(),
+  response: z.string(),
+  suggestedActions: z
+    .array(SuggestedActionSchema)
+    .optional()
+    .describe("Actions the user can take when clarification is needed"),
+  shouldPerformAction: z.boolean().optional(),
+  actionToPerform: z
+    .object({
+      action: z.string(),
+      description: z.string().optional(),
+      parameters: z.record(z.any()),
+    })
+    .optional(),
+  toolsUsed: z
+    .array(
+      z.object({
+        name: z.string(),
+        arguments: z.any(),
+        timestamp: z.string(),
+        success: z.boolean(),
+        error: z.string().optional(),
+      })
+    )
+    .optional(),
+  debuggingInfo: z
+    .object({
+      toolsExecuted: z.number(),
+      toolsList: z.array(z.string()),
+      executionSummary: z.string(),
+    })
+    .optional(),
+});
+
 // Custom email validation that handles multiple email formats
 const emailWithDisplayName = z.string().refine(
   (value) => {

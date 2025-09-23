@@ -246,6 +246,20 @@ async function callLLMWithTools(
   // Return response with debugging information
   const finalResponse = message?.content || "No response generated";
 
+  // Try to extract suggested actions from the response
+  let suggestedActions = undefined;
+  try {
+    // Look for suggestedActions in the response text
+    const suggestedActionsMatch = finalResponse.match(/suggestedActions:\s*(\[.*?\])/s);
+    if (suggestedActionsMatch) {
+      const actionsJson = suggestedActionsMatch[1];
+      suggestedActions = JSON.parse(actionsJson);
+      console.log("🎯 Found suggested actions:", suggestedActions);
+    }
+  } catch (error) {
+    console.log("⚠️ Could not parse suggested actions:", error);
+  }
+
   // If we have tools used, wrap the response with debugging info
   if (toolsUsed.length > 0) {
     const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
@@ -257,12 +271,16 @@ async function callLLMWithTools(
 
     return {
       content: finalResponse,
+      suggestedActions: suggestedActions,
       toolsUsed: toolsUsed,
       debuggingInfo: debuggingInfo,
     };
   }
 
-  return finalResponse;
+  return {
+    content: finalResponse,
+    suggestedActions: suggestedActions,
+  };
 }
 
 // Streaming version of callLLMWithTools
@@ -438,6 +456,19 @@ async function* callLLMWithToolsStream(
         }
       }
 
+      // Try to extract suggested actions from the final message
+      let suggestedActions = undefined;
+      try {
+        const suggestedActionsMatch = finalMessage.match(/suggestedActions:\s*(\[.*?\])/s);
+        if (suggestedActionsMatch) {
+          const actionsJson = suggestedActionsMatch[1];
+          suggestedActions = JSON.parse(actionsJson);
+          console.log("🎯 Found suggested actions in stream:", suggestedActions);
+        }
+      } catch (error) {
+        console.log("⚠️ Could not parse suggested actions in stream:", error);
+      }
+
       const uniqueToolNames = [...new Set(toolsUsed.map((t) => t.name))];
       const debuggingInfo = {
         toolsExecuted: toolsUsed.length,
@@ -449,6 +480,7 @@ async function* callLLMWithToolsStream(
         type: "complete",
         data: {
           message: finalMessage,
+          suggestedActions: suggestedActions,
           toolsUsed: toolsUsed,
           debuggingInfo: debuggingInfo,
         },
@@ -467,8 +499,20 @@ async function* callLLMWithToolsStream(
       yield { type: "error", data: { error: error.message } };
     }
   } else {
-    // No function call, just return the message
-    yield { type: "complete", data: { message } };
+    // No function call, try to extract suggested actions from the message
+    let suggestedActions = undefined;
+    try {
+      const suggestedActionsMatch = message.match(/suggestedActions:\s*(\[.*?\])/s);
+      if (suggestedActionsMatch) {
+        const actionsJson = suggestedActionsMatch[1];
+        suggestedActions = JSON.parse(actionsJson);
+        console.log("🎯 Found suggested actions in stream (no tools):", suggestedActions);
+      }
+    } catch (error) {
+      console.log("⚠️ Could not parse suggested actions in stream (no tools):", error);
+    }
+
+    yield { type: "complete", data: { message, suggestedActions } };
   }
 }
 
@@ -726,6 +770,37 @@ async function main() {
     - Get statistics and analytics
     - Summarize emails, draft replies, and analyze email content
     
+    🎯 CRITICAL: SUGGESTED ACTIONS FOR CLARIFICATION:
+    When the user's request is ambiguous, vague, or needs clarification, you MUST provide "suggestedActions" instead of asking questions or making assumptions.
+    
+    🚨 NEVER ask "How would you like to..." or "What would you like to..." - ALWAYS provide suggested actions!
+    
+    AMBIGUOUS PROMPTS THAT REQUIRE SUGGESTED ACTIONS:
+    - "make it better" → provide improvement options
+    - "help me with this" → provide relevant actions  
+    - "what should I do" → provide action options
+    - "improve this" → provide improvement options
+    - "change the tone" → provide tone options
+    - "fix this" → provide fix options
+    - "enhance it" → provide enhancement options
+    
+    🚨 MANDATORY FORMAT: End your response with:
+    suggestedActions: [
+      {"label": "Action Name", "prompt": "exact prompt to send", "description": "what this does"}
+    ]
+    
+    EXAMPLE RESPONSE for "help me with this":
+    I can help you with your email draft in several ways:
+    
+    suggestedActions: [
+      {"label": "Make it shorter", "prompt": "make the draft shorter and more concise", "description": "Condense the current draft"},
+      {"label": "Make it longer", "prompt": "make the draft longer with more details", "description": "Expand the current draft"},
+      {"label": "Make it more formal", "prompt": "make the draft more formal and professional", "description": "Change tone to more formal"},
+      {"label": "Make it more casual", "prompt": "make the draft more casual and friendly", "description": "Change tone to more casual"}
+    ]
+    
+    🚨 VAGUE REQUESTS RULE: If the user says "make it better", "improve this", "help me", "what should I do", "I need options" - DO NOT use tools, provide suggestedActions instead!
+    
     🚨 MOST IMPORTANT RULE: If the user has a currentDraft and asks to "make it shorter", they want to modify that draft, NOT summarize an email! Use rewriteReply tool in this case.
     
     🚨 SEMANTIC CLARIFICATION: 
@@ -904,14 +979,16 @@ async function main() {
             response: response.content?.[0]?.text || response.content,
             shouldPerformAction: response.shouldPerformAction,
             actionToPerform: response.actionToPerform,
+            suggestedActions: response.suggestedActions,
             // Include debugging info if available
             toolsUsed: response.toolsUsed || [],
             debuggingInfo: response.debuggingInfo || null,
           };
-        } else if (typeof response === "object" && response.toolsUsed) {
-          // Handle responses with tool tracking but no action protocol
+        } else if (typeof response === "object" && (response.toolsUsed || response.suggestedActions)) {
+          // Handle responses with tool tracking, suggested actions, or both
           responseData = {
             response: response.content || response,
+            suggestedActions: response.suggestedActions,
             toolsUsed: response.toolsUsed,
             debuggingInfo: response.debuggingInfo,
           };
