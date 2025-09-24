@@ -2,7 +2,7 @@ services:
   # PostgreSQL database
   postgres:
     image: postgres:15
-    container_name: heymail-postgres
+    container_name: lolmail-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
