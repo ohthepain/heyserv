@@ -1,7 +1,7 @@
 services:
   # PostgreSQL database
   postgres:
-    image: postgres:15
+    image: postgres:17
     container_name: lolmail-postgres
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -16,6 +16,31 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  heyserv:
+    build: .
+    container_name: heyserv-app
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MCP_MODE=streaming-http
+      - PORT=4000
+      - DISABLE_AUTO_TESTS=true
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./dist:/app/dist
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 volumes:
   postgres_data:

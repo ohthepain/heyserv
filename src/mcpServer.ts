@@ -28,73 +28,6 @@ import { OpenAI } from "openai";
 // Load environment variables
 dotenv.config();
 
-// Direct LLM function for chat (bypasses MCP tools)
-async function callLLMDirectly(prompt: string, context?: any, conversationHistory?: any[]): Promise<string> {
-  let systemPrompt = `You are an AI assistant that helps manage emails, contacts, and email-related tasks. You can analyze email content, draft replies, manage contacts, and provide intelligent insights about email threads and conversations.
-
-**Your Role:**
-- Analyze email threads and provide actionable insights
-- Help draft professional email replies with appropriate tone
-- Manage contacts and create memories about people
-- Suggest next steps and follow-up actions
-- Understand email context and conversation flow
-
-**Available tools (for reference):**
-- Email Analysis: summarizeEmail, analyzeEmail, draftReply, rewriteReply
-- Contact Management: createContact, getContact, listContacts, updateContact, deleteContact, createMemory, getMemories, getContactStats, getGlobalStats
-
-**Instructions:**
-- Provide helpful, actionable responses
-- Be conversational and practical
-- If you need to use specific tools, explain what you would do
-- Respect user preferences for tone and length`;
-
-  // Add rich context if provided
-  if (context) {
-    if (context.emailThread) {
-      systemPrompt += `\n\n**Email Thread:**\n${context.emailThread}`;
-    }
-
-    if (context.emailId) {
-      systemPrompt += `\n\n**Email ID:** ${context.emailId}`;
-    }
-
-    if (context.currentDraft) {
-      systemPrompt += `\n\n**Current Draft:**\n${context.currentDraft}`;
-    }
-
-    if (context.userPreferences) {
-      systemPrompt += `\n\n**User Preferences:**`;
-      if (context.userPreferences.tone) {
-        systemPrompt += `\n- Preferred tone: ${context.userPreferences.tone}`;
-      }
-      if (context.userPreferences.length) {
-        systemPrompt += `\n- Preferred length: ${context.userPreferences.length}`;
-      }
-    }
-
-    // Add conversation history if provided separately
-    if (conversationHistory && conversationHistory.length > 0) {
-      systemPrompt += `\n\n**Conversation History:**`;
-      conversationHistory.forEach((msg: any, index: number) => {
-        systemPrompt += `\n${msg.role}: ${msg.content}`;
-      });
-    }
-
-    // Also check if conversation history is embedded in context (backward compatibility)
-    if (context.conversationHistory && context.conversationHistory.length > 0) {
-      systemPrompt += `\n\n**Conversation History:**`;
-      context.conversationHistory.forEach((msg: any, index: number) => {
-        systemPrompt += `\n${msg.role}: ${msg.content}`;
-      });
-    }
-  }
-
-  const fullPrompt = `${systemPrompt}\n\n**User Request:** ${prompt}\n\nPlease provide a helpful response.`;
-
-  return await callLLM(fullPrompt);
-}
-
 async function callLLMWithTools(
   prompt: string,
   functions: any[],
@@ -726,41 +659,21 @@ async function main() {
       await transport.handleRequest(req, res, req.body);
     });
 
-    // Add a direct chat endpoint (bypasses MCP tools)
-    app.post("/prompt", async (req, res) => {
+    // Add a new endpoint for tool orchestration with context
+    app.post("/chat", async (req, res) => {
       try {
-        const { prompt, context, conversationHistory } = req.body;
+        const { prompt, context } = req.body;
         if (!prompt) {
           return res.status(400).json({ error: "Prompt is required" });
         }
 
-        // Direct LLM call - no MCP tool overhead
-        console.log("Calling LLM directly with prompt:", prompt);
-        console.log("Calling LLM directly with context:", context);
-        console.log("Calling LLM directly with conversationHistory:", conversationHistory);
-        const response = await callLLMDirectly(prompt, context, conversationHistory);
-
-        res.json({
-          success: true,
-          response: response,
-          prompt: prompt,
-          contextProvided: context ? "Yes" : "No",
-          emailId: context?.emailId || null,
-          hasEmailThread: context?.emailThread ? "Yes" : "No",
-          hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
-          conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
-        });
-      } catch (error: any) {
-        res.status(500).json({ error: "Internal server error", details: error.message });
-      }
-    });
-
-    // Add a new endpoint for tool orchestration with context
-    app.post("/chat", async (req, res) => {
-      try {
-        const { prompt, context, conversationHistory } = req.body;
-        if (!prompt) {
-          return res.status(400).json({ error: "Prompt is required" });
+        // If context documents are present, remove emailThread to avoid conflicts
+        let processedContext = context;
+        if (context && context.contextDocuments && context.contextDocuments.length > 0) {
+          console.log("🎯 Context documents detected - removing emailThread to avoid conflicts");
+          processedContext = { ...context };
+          delete processedContext.emailThread;
+          delete processedContext.emailId;
         }
 
         // Build context-aware system prompt
@@ -769,6 +682,18 @@ async function main() {
     - Add and retrieve memories about contacts  
     - Get statistics and analytics
     - Summarize emails, draft replies, and analyze email content
+
+    🎯 RESPONSE STYLE GUIDELINES:
+    - For simple questions (like "Does this candidate have finance experience?"), give a direct, concise answer WITHOUT using tools
+    - Only use tools when the user explicitly requests: "draft a reply", "summarize this email", "create a contact", etc.
+    - For questions about content in context documents, answer directly from the content - NO TOOLS NEEDED
+    - Be conversational and helpful, but KEEP IT BRIEF
+    - Don't launch into summaries unless specifically asked to summarize something
+    - Match the user's tone and level of detail
+    - For yes/no questions, give a clear yes/no answer first, then brief explanation if needed
+    
+    🚨🚨🚨 CRITICAL CONTEXT DOCUMENTS RULE 🚨🚨🚨
+    If context documents are provided and the user mentions them (like "demo script"), you MUST prioritize the context documents over ANY email thread content. Use the context documents as the primary source for all responses and drafts.
     
     🎯 CRITICAL: SUGGESTED ACTIONS FOR CLARIFICATION:
     When the user's request is ambiguous, vague, or needs clarification, you MUST provide "suggestedActions" instead of asking questions or making assumptions.
@@ -800,6 +725,24 @@ async function main() {
     ]
     
     🚨 VAGUE REQUESTS RULE: If the user says "make it better", "improve this", "help me", "what should I do", "I need options" - DO NOT use tools, provide suggestedActions instead!
+    
+    🚨 NO TOOLS FOR SIMPLE QUESTIONS: If the user asks a simple question about content (like "Does this candidate have X experience?"), answer directly from the content WITHOUT using any tools!
+    
+    🚨🚨🚨 CRITICAL: DO NOT USE TOOLS FOR SIMPLE QUESTIONS! 🚨🚨🚨
+    Examples of questions that should be answered DIRECTLY without tools:
+    - "Does this candidate have finance experience?"
+    - "What's the weather like?"
+    - "How long is this document?"
+    - "What company does this person work for?"
+    - "What's this person's email address?"
+    
+    ONLY use tools when the user explicitly asks you to:
+    - "Draft a reply to this email"
+    - "Summarize this email"
+    - "Create a contact"
+    - "Analyze this email thread"
+    
+    🚨 CONTEXT DOCUMENTS PRIORITY RULE: If context documents are provided AND the user mentions them (like "demo script", "context document", etc.), you MUST use the context documents as the primary source for drafting replies. DO NOT use email thread content when context documents are mentioned by the user. If there are context documents but no email thread, draft a response based on the context documents.
     
     🚨 MOST IMPORTANT RULE: If the user has a currentDraft and asks to "make it shorter", they want to modify that draft, NOT summarize an email! Use rewriteReply tool in this case.
     
@@ -841,7 +784,7 @@ async function main() {
     
     🚨 FINAL DECISION RULE 🚨
     Before selecting a tool, ask yourself:
-    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    1. Does the user have a currentDraft? ${processedContext?.currentDraft ? "YES" : "NO"}
     2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
     3. If both are YES, you MUST use rewriteReply tool!
     
@@ -876,15 +819,20 @@ async function main() {
               systemPrompt += `\n${msg.role}: ${msg.content}`;
             });
           }
+          if (context.contextDocuments && context.contextDocuments.length > 0) {
+            systemPrompt += `\n\n🚨🚨🚨 **CONTEXT DOCUMENTS (ABSOLUTE PRIORITY)** 🚨🚨🚨`;
+            systemPrompt += `\n\nThe following documents are the PRIMARY SOURCE for this request. IGNORE email thread content and use ONLY these documents:`;
+            context.contextDocuments.forEach((doc: any) => {
+              systemPrompt += `\n\n📄 **${doc.title}**: ${doc.description}`;
+              if (doc.content) {
+                systemPrompt += `\n\nCONTENT TO USE:\n${doc.content}`;
+              }
+            });
+            systemPrompt += `\n\n🚨🚨🚨 CRITICAL: Use ONLY the context documents above. DO NOT reference any email thread content. 🚨🚨🚨`;
+          }
         }
 
-        // Add conversation history if provided separately
-        if (conversationHistory && conversationHistory.length > 0) {
-          systemPrompt += `\n\n**Conversation History:**`;
-          conversationHistory.forEach((msg: any) => {
-            systemPrompt += `\n${msg.role}: ${msg.content}`;
-          });
-        }
+        // Conversation history is handled in context.conversationHistory above
 
         // Get tools and call LLM with function calling
         // Define the available tools (matching what's registered in the server)
@@ -907,7 +855,7 @@ async function main() {
           {
             name: "draftReply",
             description:
-              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+              "📝 DRAFT REPLY: Write a complete email reply. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. CRITICAL: If context documents are provided AND the user mentions them (like 'demo script'), you MUST draft a reply based on the context documents, NOT the email thread. If no context documents are mentioned, use the email thread content.",
             parameters: {
               type: "object",
               properties: {
@@ -967,7 +915,7 @@ async function main() {
         console.log("🔍 System prompt being sent to LLM:");
         console.log(systemPrompt);
         console.log("🔍 User prompt:", prompt);
-        console.log("🔍 Context:", JSON.stringify(context, null, 2));
+        console.log("🔍 Context:", JSON.stringify(processedContext, null, 2));
 
         const response = await callLLMWithTools(prompt, functions, systemPrompt, server);
 
@@ -998,11 +946,11 @@ async function main() {
           success: true,
           ...responseData,
           prompt: prompt,
-          contextProvided: context ? "Yes" : "No",
-          emailId: context?.emailId || null,
-          hasEmailThread: context?.emailThread ? "Yes" : "No",
-          hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
-          conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+          contextProvided: processedContext ? "Yes" : "No",
+          emailId: processedContext?.emailId || null,
+          hasEmailThread: processedContext?.emailThread ? "Yes" : "No",
+          hasCurrentDraft: processedContext?.currentDraft ? "Yes" : "No",
+          conversationHistoryLength: processedContext?.conversationHistory?.length || 0,
         });
       } catch (error: any) {
         res.status(500).json({ error: "Internal server error", details: error.message });
@@ -1012,9 +960,18 @@ async function main() {
     // Streaming chat endpoint
     app.post("/chat/stream", async (req, res) => {
       try {
-        const { prompt, context, conversationHistory } = req.body;
+        const { prompt, context } = req.body;
         if (!prompt) {
           return res.status(400).json({ error: "Prompt is required" });
+        }
+
+        // If context documents are present, remove emailThread to avoid conflicts
+        let processedContext = context;
+        if (context && context.contextDocuments && context.contextDocuments.length > 0) {
+          console.log("🎯 Context documents detected - removing emailThread to avoid conflicts");
+          processedContext = { ...context };
+          delete processedContext.emailThread;
+          delete processedContext.emailId;
         }
 
         // Set up Server-Sent Events
@@ -1073,7 +1030,7 @@ async function main() {
     
     🚨 FINAL DECISION RULE 🚨
     Before selecting a tool, ask yourself:
-    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    1. Does the user have a currentDraft? ${processedContext?.currentDraft ? "YES" : "NO"}
     2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
     3. If both are YES, you MUST use rewriteReply tool!
     
@@ -1110,13 +1067,7 @@ async function main() {
           }
         }
 
-        // Add conversation history if provided separately
-        if (conversationHistory && conversationHistory.length > 0) {
-          systemPrompt += `\n\n**Conversation History:**`;
-          conversationHistory.forEach((msg: any) => {
-            systemPrompt += `\n${msg.role}: ${msg.content}`;
-          });
-        }
+        // Conversation history is handled in context.conversationHistory above
 
         // Define the same available tools as the regular chat endpoint
         const availableTools = [
@@ -1138,7 +1089,7 @@ async function main() {
           {
             name: "draftReply",
             description:
-              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+              "📝 DRAFT REPLY: Write a complete email reply. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. CRITICAL: If context documents are provided AND the user mentions them (like 'demo script'), you MUST draft a reply based on the context documents, NOT the email thread. If no context documents are mentioned, use the email thread content.",
             parameters: {
               type: "object",
               properties: {
@@ -1198,11 +1149,11 @@ async function main() {
             type: "metadata",
             data: {
               prompt,
-              contextProvided: context ? "Yes" : "No",
-              emailId: context?.emailId || null,
-              hasEmailThread: context?.emailThread ? "Yes" : "No",
-              hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
-              conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+              contextProvided: processedContext ? "Yes" : "No",
+              emailId: processedContext?.emailId || null,
+              hasEmailThread: processedContext?.emailThread ? "Yes" : "No",
+              hasCurrentDraft: processedContext?.currentDraft ? "Yes" : "No",
+              conversationHistoryLength: processedContext?.conversationHistory?.length || 0,
             },
           })}\n\n`
         );
@@ -1413,7 +1364,7 @@ async function main() {
           "POST /profile/:userId/reset - Reset profile to defaults",
         ],
         mcpEndpoint: "/mcp",
-        promptEndpoint: "/prompt",
+        promptEndpoint: "/chat",
         chatEndpoint: "/chat",
         streamingChatEndpoint: "/chat/stream",
       });
@@ -1422,9 +1373,18 @@ async function main() {
     // Add streaming chat endpoint to streaming-http mode
     app.post("/chat/stream", async (req, res) => {
       try {
-        const { prompt, context, conversationHistory } = req.body;
+        const { prompt, context } = req.body;
         if (!prompt) {
           return res.status(400).json({ error: "Prompt is required" });
+        }
+
+        // If context documents are present, remove emailThread to avoid conflicts
+        let processedContext = context;
+        if (context && context.contextDocuments && context.contextDocuments.length > 0) {
+          console.log("🎯 Context documents detected - removing emailThread to avoid conflicts");
+          processedContext = { ...context };
+          delete processedContext.emailThread;
+          delete processedContext.emailId;
         }
 
         // Set up Server-Sent Events
@@ -1483,7 +1443,7 @@ async function main() {
     
     🚨 FINAL DECISION RULE 🚨
     Before selecting a tool, ask yourself:
-    1. Does the user have a currentDraft? ${context?.currentDraft ? "YES" : "NO"}
+    1. Does the user have a currentDraft? ${processedContext?.currentDraft ? "YES" : "NO"}
     2. Is the user asking to "make it shorter"? ${prompt.toLowerCase().includes("make it shorter") ? "YES" : "NO"}
     3. If both are YES, you MUST use rewriteReply tool!
     
@@ -1520,13 +1480,7 @@ async function main() {
           }
         }
 
-        // Add conversation history if provided separately
-        if (conversationHistory && conversationHistory.length > 0) {
-          systemPrompt += `\n\n**Conversation History:**`;
-          conversationHistory.forEach((msg: any) => {
-            systemPrompt += `\n${msg.role}: ${msg.content}`;
-          });
-        }
+        // Conversation history is handled in context.conversationHistory above
 
         // Define the same available tools as the regular chat endpoint
         const availableTools = [
@@ -1548,7 +1502,7 @@ async function main() {
           {
             name: "draftReply",
             description:
-              "📝 DRAFT REPLY: Write a complete email reply to respond to an email. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. IMPORTANT: Use the actual email content from the Email Thread context, not a made-up version.",
+              "📝 DRAFT REPLY: Write a complete email reply. Use when user asks to 'draft reply', 'write a response', or 'reply to this'. CRITICAL: If context documents are provided AND the user mentions them (like 'demo script'), you MUST draft a reply based on the context documents, NOT the email thread. If no context documents are mentioned, use the email thread content.",
             parameters: {
               type: "object",
               properties: {
@@ -1608,11 +1562,11 @@ async function main() {
             type: "metadata",
             data: {
               prompt,
-              contextProvided: context ? "Yes" : "No",
-              emailId: context?.emailId || null,
-              hasEmailThread: context?.emailThread ? "Yes" : "No",
-              hasCurrentDraft: context?.currentDraft ? "Yes" : "No",
-              conversationHistoryLength: conversationHistory?.length || context?.conversationHistory?.length || 0,
+              contextProvided: processedContext ? "Yes" : "No",
+              emailId: processedContext?.emailId || null,
+              hasEmailThread: processedContext?.emailThread ? "Yes" : "No",
+              hasCurrentDraft: processedContext?.currentDraft ? "Yes" : "No",
+              conversationHistoryLength: processedContext?.conversationHistory?.length || 0,
             },
           })}\n\n`
         );
@@ -1707,7 +1661,7 @@ async function main() {
           "getGlobalStats",
         ],
         mcpEndpoint: "/mcp",
-        promptEndpoint: "/prompt",
+        promptEndpoint: "/chat",
         chatEndpoint: "/chat",
         profileEndpoints: [
           "GET /profile/:userId - Get user profile",
