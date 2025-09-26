@@ -21,6 +21,7 @@ services:
   # LolServ MCP Server (Production Image)
   lolserv:
     image: ohthepain/lolserv:latest
+    platform: linux/amd64
     container_name: lolserv-app
     environment:
       - NODE_ENV=production
@@ -30,7 +31,7 @@ services:
       - PORT=4000
       - DISABLE_AUTO_TESTS=true
     ports:
-      - "4000:4000"
+      - "4001:4000"
     depends_on:
       postgres:
         condition: service_healthy

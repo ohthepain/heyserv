@@ -13,21 +13,19 @@ REGISTRY_USERNAME="ohthepain"  # Your Docker Hub username
 IMAGE_NAME="lolserv"
 TAG="latest"
 
-echo "📦 Building the Docker image..."
-docker compose build lolserv
+echo "📦 Building and pushing the Docker image for both AMD64 and ARM64 platforms..."
+echo "💡 Make sure you're logged in to Docker Hub: docker login"
+echo ""
+docker buildx build --platform linux/amd64,linux/arm64 --push -t ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG} .
 
-echo "🏷️  Tagging image for registry..."
-docker tag lolserv-lolserv:latest ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}
-
-echo "🔐 Please login to Docker Hub:"
-echo "   docker login"
-echo ""
-echo "📤 Then push the image:"
-echo "   docker push ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}"
-echo ""
-echo "🚀 On your production server, pull and run:"
-echo "   docker pull ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}"
-echo "   docker tag ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG} lolserv:production"
-echo "   docker compose -f compose-production.yml up -d"
-echo ""
-echo "✅ Image ready for push: ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}"
+if [ $? -eq 0 ]; then
+    echo ""
+    echo "✅ Successfully built and pushed to registry: ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}"
+    echo ""
+    echo "🚀 On your production server, run:"
+    echo "   docker pull ${REGISTRY_USERNAME}/${IMAGE_NAME}:${TAG}"
+    echo "   docker-compose -f compose-production.yml up -d"
+else
+    echo "❌ Failed to build and push image to registry"
+    exit 1
+fi

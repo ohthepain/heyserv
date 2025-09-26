@@ -1,5 +1,5 @@
 # Use Node.js 20 LTS Alpine for smaller image size
-FROM node:20-alpine
+FROM --platform=linux/amd64 node:20-alpine
 
 # Set working directory
 WORKDIR /app
@@ -25,11 +25,25 @@ RUN npx prisma generate
 COPY src ./src/
 COPY tsconfig.json ./
 
+# Show what we're about to build
+RUN echo "Source files:" && find src -name "*.ts" | head -10
+RUN echo "TypeScript config:" && cat tsconfig.json
+
 # Build the application
-RUN npm run build
+RUN echo "Starting TypeScript build..." && npm run build
+RUN echo "Build completed, checking output..."
+
+# Verify the build was successful
+RUN echo "Contents of dist directory:" && ls -la dist/
+RUN echo "Checking for mcpServer.js:" && ls -la dist/mcpServer.js
+RUN echo "File size of mcpServer.js:" && wc -l dist/mcpServer.js
 
 # Remove dev dependencies after build
 RUN npm prune --production
+
+# Final verification that the built files still exist
+RUN echo "Final verification - checking dist directory after npm prune:" && ls -la dist/
+RUN echo "Final verification - checking mcpServer.js exists:" && test -f dist/mcpServer.js && echo "mcpServer.js exists" || echo "mcpServer.js missing!"
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs
