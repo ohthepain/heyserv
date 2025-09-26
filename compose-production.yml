@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5434:5432"
+      - "5455:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
@@ -20,7 +20,7 @@ services:
 
   # LolServ MCP Server (Production Image)
   lolserv:
-    image: lolserv:production
+    image: ohthepain/lolserv:latest
     container_name: lolserv-app
     environment:
       - NODE_ENV=production
