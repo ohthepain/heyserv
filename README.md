@@ -1,4 +1,4 @@
-# HeyServ - Gmail AI MCP Server
+# LOLServ - Gmail AI MCP Server
 
 A modern Model Context Protocol (MCP) server that provides AI-powered Gmail tools for email analysis, summarization, drafting replies, and rewriting content. Built with the latest MCP SDK patterns and full type safety.
 
@@ -234,7 +234,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "gmail-ai": {
       "command": "npx",
-      "args": ["tsx", "/path/to/heyserv/src/mcpServer.ts"],
+      "args": ["tsx", "/path/to/lolserv/src/mcpServer.ts"],
       "env": {
         "OPENAI_API_KEY": "your-api-key-here"
       }

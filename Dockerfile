@@ -33,11 +33,11 @@ RUN npm prune --production
 
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs
-RUN adduser -S heyserv -u 1001
+RUN adduser -S lolserv -u 1001 -G nodejs
 
 # Change ownership of the app directory
-RUN chown -R heyserv:nodejs /app
-USER heyserv
+RUN chown -R lolserv:nodejs /app
+USER lolserv
 
 # Expose port
 EXPOSE 4000

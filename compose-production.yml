@@ -16,9 +16,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
+  # LolServ MCP Server (Production Image)
   lolserv:
-    build: .
+    image: lolserv:production
     container_name: lolserv-app
     environment:
       - NODE_ENV=production
@@ -32,8 +34,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./dist:/app/dist
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4000/"]

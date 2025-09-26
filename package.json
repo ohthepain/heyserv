@@ -1,5 +1,5 @@
 {
-  "name": "heyserv",
+  "name": "lolserv",
   "version": "1.0.0",
   "description": "MCP Server for Gmail AI tools",
   "main": "dist/mcpServer.js",
