@@ -9,7 +9,7 @@ echo "🐳 LolServ Docker Registry Deployment"
 echo "====================================="
 
 # Configuration
-REGISTRY_USERNAME="your-dockerhub-username"  # Change this to your Docker Hub username
+REGISTRY_USERNAME="ohthepain"  # Your Docker Hub username
 IMAGE_NAME="lolserv"
 TAG="latest"
 

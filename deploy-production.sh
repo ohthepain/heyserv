@@ -6,20 +6,26 @@
 set -e  # Exit on any error
 
 # Configuration
-REGISTRY_USERNAME="your-dockerhub-username"  # Change this to your Docker Hub username
+REGISTRY_USERNAME="ohthepain"  # Your Docker Hub username
 
 echo "🚀 LolServ Production Deployment"
 echo "================================"
 
-# Check if we're on the production server
-if [ ! -d "/opt/lolserv" ]; then
-    echo "❌ Error: This script should be run on the production server"
-    echo "   Expected directory: /opt/lolserv"
+# Check if we're in a git repository with the right files
+if [ ! -f "compose-production.yml" ] || [ ! -f "deploy-production.sh" ]; then
+    echo "❌ Error: This script should be run from the project root directory"
+    echo "   Expected files: compose-production.yml, deploy-production.sh"
+    echo "   Current directory: $(pwd)"
+    echo ""
+    echo "💡 To deploy:"
+    echo "   1. Clone the repository: git clone <your-repo-url>"
+    echo "   2. cd into the project directory"
+    echo "   3. Copy your .env file to the project root"
+    echo "   4. Run: ./deploy-production.sh"
     exit 1
 fi
 
-# Navigate to the project directory
-cd /opt/lolserv
+echo "📁 Running from: $(pwd)"
 
 echo "📦 Pulling production Docker image..."
 docker pull ${REGISTRY_USERNAME}/lolserv:latest

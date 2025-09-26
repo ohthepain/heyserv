@@ -600,6 +600,17 @@ function runProtocolTestsInBackground(port: number) {
     return;
   }
 
+  // Skip tests in Docker containers (production environment)
+  if (
+    process.env.NODE_ENV === "production" ||
+    process.env.DOCKER === "true" ||
+    process.cwd() === "/app" ||
+    process.env.PWD === "/app"
+  ) {
+    console.log("🧪 Auto protocol tests skipped (production/Docker environment)");
+    return;
+  }
+
   // Wait a bit for the server to fully start
   setTimeout(() => {
     console.log("🧪 Running protocol tests in background...");
